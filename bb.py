@@ -13,6 +13,7 @@ import time
 import requests  # Add this import for Wikipedia API
 from urllib.parse import quote  # Correct import for quote
 import json  # For Google AI API
+from pymongo import MongoClient
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.INFO)
@@ -571,6 +572,8 @@ async def on_voice_state_update(member, before, after):
             except discord.HTTPException as e:
                 logger.error(f"HTTP error deleting channel: {e}")
 
+        save_all_data()
+
     except Exception as e:
         logger.error(f"Unexpected error in voice state update: {e}")
 
@@ -674,6 +677,8 @@ async def on_message(message):
                     f"TAG NA GAR MUJI, MUTE KHANCHAS - {message.author.mention} - Do not use everyone unless absolutely necessary! Next time will result in a 24h timeout."
                 )
 
+            save_all_data()
+
         # Mention spam protection
         now_ts = discord.utils.utcnow().timestamp()
         for mentioned in message.mentions:
@@ -706,6 +711,8 @@ async def on_message(message):
                     mention_spam_tracker[key].clear()
                     if key in mention_spam_warnings:
                         del mention_spam_warnings[key]
+
+            save_all_data()
 
         await bot.process_commands(
             message)  # Process commands after checking message content
@@ -1144,6 +1151,9 @@ async def check_and_assign_roles(member, channels_created):
                         logger.error(
                             f"Cannot assign role {role_name} to {member.display_name}"
                         )
+
+        save_all_data()
+
     except Exception as e:
         logger.error(f"Error in role assignment: {e}")
 
@@ -1177,6 +1187,89 @@ async def set_shape(ctx, character: str = None):
     active_character_per_channel[ctx.channel.id] = character
     await ctx.send(f"✅ Character set to '{character}' for this channel!")
 
+
+# MongoDB Atlas connection
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client["discord_bot"]
+
+# --- Persistence Functions ---
+def save_all_data():
+    # Save miku_memory
+    mem_data = [{"user_id": str(k), "history": list(v)} for k, v in miku_memory.user_history.items()]
+    db.miku_memory.delete_many({})
+    if mem_data:
+        db.miku_memory.insert_many(mem_data)
+    # Save voice_activity_today
+    db.voice_activity.delete_many({})
+    if voice_activity_today:
+        db.voice_activity.insert_one({"data": voice_activity_today})
+    # Save channel_stats
+    db.channel_stats.delete_many({})
+    if channel_stats:
+        db.channel_stats.insert_one({"data": channel_stats})
+    # Save created_channels
+    db.created_channels.delete_many({})
+    if created_channels:
+        db.created_channels.insert_one({"ids": list(created_channels.keys())})
+    # Save everyone_warnings
+    db.everyone_warnings.delete_many({})
+    if everyone_warnings:
+        db.everyone_warnings.insert_one({"data": everyone_warnings})
+    # Save mention_spam_tracker
+    tracker_data = [{"key": str(k), "timestamps": list(v)} for k, v in mention_spam_tracker.items()]
+    db.mention_spam_tracker.delete_many({})
+    if tracker_data:
+        db.mention_spam_tracker.insert_many(tracker_data)
+    # Save mention_spam_warnings
+    db.mention_spam_warnings.delete_many({})
+    if mention_spam_warnings:
+        db.mention_spam_warnings.insert_one({"data": mention_spam_warnings})
+
+def load_all_data():
+    # Load miku_memory
+    miku_memory.user_history.clear()
+    for doc in db.miku_memory.find():
+        miku_memory.user_history[doc["user_id"]] = deque(doc["history"], maxlen=5)
+    # Load voice_activity_today
+    voice_activity_today.clear()
+    doc = db.voice_activity.find_one()
+    if doc:
+        voice_activity_today.update(doc["data"])
+    # Load channel_stats
+    doc = db.channel_stats.find_one()
+    if doc:
+        channel_stats.clear()
+        channel_stats.update(doc["data"])
+    # Load created_channels
+    created_channels.clear()
+    doc = db.created_channels.find_one()
+    if doc:
+        for cid in doc["ids"]:
+            created_channels[int(cid)] = True
+    # Load everyone_warnings
+    everyone_warnings.clear()
+    doc = db.everyone_warnings.find_one()
+    if doc:
+        everyone_warnings.update(doc["data"])
+    # Load mention_spam_tracker
+    mention_spam_tracker.clear()
+    for doc in db.mention_spam_tracker.find():
+        key = eval(doc["key"])
+        mention_spam_tracker[key] = deque(doc["timestamps"], maxlen=MENTION_SPAM_THRESHOLD)
+    # Load mention_spam_warnings
+    mention_spam_warnings.clear()
+    doc = db.mention_spam_warnings.find_one()
+    if doc:
+        mention_spam_warnings.update(doc["data"])
+
+# Load data on startup
+load_all_data()
+
+# Save data after important events (example: after on_message, on_voice_state_update, etc.)
+# For demonstration, add after on_message:
+# await ...
+# save_all_data()
 
 keep_alive()
 # Validate token before running
