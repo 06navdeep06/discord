@@ -678,18 +678,10 @@ async def on_message(message):
         now_ts = discord.utils.utcnow().timestamp()
         for mentioned in message.mentions:
             # Check if the mention is explicit in the message content (not just a reply)
-            explicit_mention = False
-            # Try both username and display_name (nickname)
-            possible_tags = [f"@{mentioned.name}"]
-            if mentioned.display_name and mentioned.display_name != mentioned.name:
-                possible_tags.append(f"@{mentioned.display_name}")
-            # Check if any of the possible tags are in the message content
-            for tag in possible_tags:
-                if tag.lower() in message.content.lower():
-                    explicit_mention = True
-                    break
+            mention_patterns = [f"<@{mentioned.id}>", f"<@!{mentioned.id}>"]
+            explicit_mention = any(pattern in message.content for pattern in mention_patterns)
             if not explicit_mention:
-                continue  # Skip if not an explicit @username tag
+                continue  # Skip if not an explicit @user_id tag
             key = (message.author.id, mentioned.id)
             dq = mention_spam_tracker[key]
             dq.append(now_ts)
