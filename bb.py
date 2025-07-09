@@ -21,6 +21,24 @@ import psutil
 import traceback
 from io import BytesIO
 
+# --- Per-Guild Settings Helper Functions ---
+
+def get_guild_settings(guild_id):
+    if db is None:
+        return {}
+    settings = db.guild_settings.find_one({"guild_id": guild_id})
+    return settings or {}
+
+def set_guild_setting(guild_id, key, value):
+    if db is None:
+        return
+    db.guild_settings.update_one(
+        {"guild_id": guild_id},
+        {"$set": {key: value}},
+        upsert=True
+    )
+
+
 
 WELCOME_GIFS = [
     "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
@@ -520,8 +538,9 @@ async def on_member_join(member):
     try:
         # Update server stats
         server_stats["users_joined"] += 1
-        
-        welcome_channel = bot.get_channel(1363907470010880080)
+        settings = get_guild_settings(member.guild.id)
+        welcome_channel_id = settings.get("welcome_channel_id")
+        welcome_channel = bot.get_channel(welcome_channel_id) if welcome_channel_id else None
         if welcome_channel:
             # Greeting detection
             greetings = ["hello", "hi", "hey", "namaste", "yo", "sup", "wassup"]
@@ -597,9 +616,9 @@ async def on_member_remove(member):
     """Handle member leaving"""
     try:
         server_stats["users_left"] += 1
-        
-        # Log to moderation channel
-        mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
+        settings = get_guild_settings(member.guild.id)
+        modlog_channel_id = settings.get("modlog_channel_id")
+        mod_channel = bot.get_channel(modlog_channel_id) if modlog_channel_id else None
         if mod_channel:
             embed = discord.Embed(
                 title="👋 Member Left",
@@ -619,8 +638,9 @@ async def on_member_remove(member):
 async def on_message_delete(message):
     """Handle message deletion"""
     try:
-        # Log to moderation channel
-        mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
+        settings = get_guild_settings(message.guild.id)
+        modlog_channel_id = settings.get("modlog_channel_id")
+        mod_channel = bot.get_channel(modlog_channel_id) if modlog_channel_id else None
         if mod_channel and not message.author.bot:
             embed = discord.Embed(
                 title="🗑️ Message Deleted",
@@ -642,9 +662,9 @@ async def on_message_edit(before, after):
         # Ignore bot messages and if content didn't change
         if before.author.bot or before.content == after.content:
             return
-            
-        # Log to moderation channel
-        mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
+        settings = get_guild_settings(before.guild.id)
+        modlog_channel_id = settings.get("modlog_channel_id")
+        mod_channel = bot.get_channel(modlog_channel_id) if modlog_channel_id else None
         if mod_channel:
             embed = discord.Embed(
                 title="✏️ Message Edited",
@@ -706,18 +726,14 @@ async def on_voice_state_update(member, before, after):
             voice_activity_today[user_id]["join_time"] = discord.utils.utcnow()
 
         # User left a voice channel or switched
-        elif before.channel and (not after.channel
-                                 or before.channel != after.channel):
+        elif before.channel and (not after.channel or before.channel != after.channel):
             join_time = voice_activity_today[user_id]["join_time"]
             now = discord.utils.utcnow()
-            # Ensure both are naive or both are aware
             if join_time is not None:
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
-                    # join_time is aware, make now aware if not
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
                         now = now.replace(tzinfo=datetime.timezone.utc)
                 else:
-                    # join_time is naive, make now naive
                     if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
                         now = now.replace(tzinfo=None)
                 time_spent = (now - join_time).total_seconds()
@@ -739,24 +755,26 @@ async def on_voice_state_update(member, before, after):
                 voice_activity_today[user_id]["total_time"] += time_spent
             voice_activity_today[user_id]["join_time"] = discord.utils.utcnow()
 
+        # Use per-guild AFK channel
+        settings = get_guild_settings(member.guild.id)
+        afk_channel_id = settings.get("afk_channel_id")
+
         # User joined a voice channel (start AFK tracking)
-        if after.channel and after.channel.id != AFK_CHANNEL_ID:
+        if after.channel and (not afk_channel_id or after.channel.id != afk_channel_id):
             user_voice_activity[user_id] = {
                 "last_activity": discord.utils.utcnow(),
                 "channel_id": after.channel.id,
                 "afk_task": None,
-                "deafen_start":
-                discord.utils.utcnow() if after.self_deaf else None
+                "deafen_start": discord.utils.utcnow() if after.self_deaf else None
             }
             if user_id in user_voice_activity:
                 user_voice_activity[user_id]["afk_task"] = asyncio.create_task(
                     check_afk_status(member, user_id))
 
         # Handle deafen/undeafen status changes
-        if after.channel and after.channel.id != AFK_CHANNEL_ID and user_id in user_voice_activity:
+        if after.channel and (not afk_channel_id or after.channel.id != afk_channel_id) and user_id in user_voice_activity:
             if not before.self_deaf and after.self_deaf:
-                user_voice_activity[user_id][
-                    "deafen_start"] = discord.utils.utcnow()
+                user_voice_activity[user_id]["deafen_start"] = discord.utils.utcnow()
             elif before.self_deaf and not after.self_deaf:
                 user_voice_activity[user_id]["deafen_start"] = None
 
@@ -923,8 +941,14 @@ async def on_message(message):
             bot._recent_endings = []
         recent_endings = bot._recent_endings[-3:]
 
-        # Only respond with AI/Miku in the specified channel
-        if message.channel.id == 1391673946386075678:
+        # --- Refactor AI/Miku channel ID to use per-guild settings ---
+
+        # In on_message, replace:
+        # if message.channel.id == 1391673946386075678:
+        # with:
+        settings = get_guild_settings(message.guild.id)
+        ai_channel_id = settings.get("ai_channel_id")
+        if ai_channel_id and message.channel.id == ai_channel_id:
             # Only respond to normal messages (not commands)
             if not message.content.startswith("!"):
                 try:
@@ -966,6 +990,13 @@ async def on_message(message):
                 except discord.HTTPException as e:
                     logger.error(f"Failed to reply: {e}")
                 return
+
+        # If not configured, prompt admin (once per session or with a cooldown)
+        if not ai_channel_id and message.content.startswith("!miku"):  # Example fallback
+            if message.author.guild_permissions.administrator:
+                await message.channel.send(
+                    "❗ AI/Miku channel is not configured. Please set it up with `!setaichannel #channel` (admin only)."
+                )
 
         miku_memory.add_message(message.author.id, message.content)
         recent = miku_memory.get_recent(message.author.id)
@@ -1376,51 +1407,41 @@ async def set_theme(ctx, *, theme_input: Optional[str] = None):
 
 
 async def check_afk_status(member: discord.Member, user_id: str):
-    """Check if user has been AFK and move them to AFK channel"""
     try:
-        # Check if user is still in voice and hasn't had recent activity
+        settings = get_guild_settings(member.guild.id)
+        afk_channel_id = settings.get("afk_channel_id")
         if user_id in user_voice_activity:
             current_time = discord.utils.utcnow()
             last_activity = user_voice_activity[user_id]["last_activity"]
             deafen_start = user_voice_activity[user_id].get("deafen_start")
 
-            time_since_activity = (current_time -
-                                   last_activity).total_seconds()
+            time_since_activity = (current_time - last_activity).total_seconds()
 
-            # Check if user is deafened and has been for 10 minutes
             deafened_long_enough = False
             if deafen_start:
-                time_since_deafen = (current_time -
-                                     deafen_start).total_seconds()
+                time_since_deafen = (current_time - deafen_start).total_seconds()
                 deafened_long_enough = time_since_deafen >= 600  # 10 minutes
 
-            # If user has been inactive for the timeout period and deafened for 10 mins
             if (time_since_activity >= AFK_TIMEOUT) and deafened_long_enough:
-
                 voice_state = member.voice
-
-                if voice_state and voice_state.channel and voice_state.channel.id != AFK_CHANNEL_ID:
+                if voice_state and voice_state.channel and afk_channel_id and voice_state.channel.id != afk_channel_id:
                     try:
-                        afk_channel = bot.get_channel(AFK_CHANNEL_ID)
+                        afk_channel = member.guild.get_channel(afk_channel_id)
                         if afk_channel:
                             await member.move_to(afk_channel)
                             logger.info(
                                 f"Moved {member.display_name} to AFK channel due to inactivity"
                             )
-
-                            # Send notification
-                            welcome_channel = bot.get_channel(
-                                WELCOME_CHANNEL_ID)
+                            welcome_channel_id = settings.get("welcome_channel_id")
+                            welcome_channel = member.guild.get_channel(welcome_channel_id) if welcome_channel_id else None
                             if welcome_channel:
                                 embed = discord.Embed(
                                     title="😴 User Moved to AFK",
-                                    description=
-                                    f"{member.mention} was moved to AFK due to inactivity",
+                                    description=f"{member.mention} was moved to AFK due to inactivity",
                                     color=0xffaa00)
                                 embed.add_field(
                                     name="Reason",
-                                    value=
-                                    f"No activity detected for {AFK_TIMEOUT//60} minutes and deafened for 10 minutes",
+                                    value=f"No activity detected for {AFK_TIMEOUT//60} minutes and deafened for 10 minutes",
                                     inline=True)
                                 await welcome_channel.send(embed=embed)
                     except discord.Forbidden:
@@ -1430,13 +1451,9 @@ async def check_afk_status(member: discord.Member, user_id: str):
                     except Exception as e:
                         logger.error(
                             f"Error moving {member.display_name} to AFK: {e}")
-
-                # Clean up tracking
                 if user_id in user_voice_activity:
                     del user_voice_activity[user_id]
-
     except asyncio.CancelledError:
-        # Task was cancelled (user showed activity)
         pass
     except Exception as e:
         logger.error(f"Error in AFK check for {member.display_name}: {e}")
@@ -2687,13 +2704,24 @@ DM_CATEGORY_ID = 1363906960583557322
 user_dm_channels = {}
 
 async def get_or_create_dm_channel(guild, user):
+    settings = get_guild_settings(guild.id)
+    dm_category_id = settings.get("dm_category_id")
+    if not dm_category_id:
+        # Fallback: prompt admin if not set
+        admin = discord.utils.get(guild.members, guild_permissions__administrator=True)
+        if admin:
+            try:
+                await admin.send(f"❗ DM category is not configured for {guild.name}. Please set it up with `!setdmcategory`.")
+            except:
+                pass
+        raise Exception("DM category not configured.")
     # Check if we already have a channel for this user
     if user.id in user_dm_channels:
         channel = guild.get_channel(user_dm_channels[user.id])
         if channel:
             return channel
     # Find by name in case mapping is lost
-    category = guild.get_channel(DM_CATEGORY_ID)
+    category = guild.get_channel(dm_category_id)
     channel_name = f"dm-{user.display_name.lower().replace(' ', '-')[:20]}"
     for ch in category.text_channels:
         if ch.name == channel_name:
@@ -2701,7 +2729,6 @@ async def get_or_create_dm_channel(guild, user):
             return ch
     # Create new channel
     overwrites = category.overwrites.copy() if hasattr(category, 'overwrites') else {}
-    # Only allow admins (sync with category)
     channel = await guild.create_text_channel(
         name=channel_name,
         category=category,
@@ -3168,3 +3195,36 @@ else:
         logger.error("❌ Invalid Discord token!")
     except Exception as e:
         logger.error(f"❌ Bot startup error: {e}")
+
+
+# --- Admin Setup Commands for Per-Guild Settings ---
+
+@bot.command(name="setwelcome")
+@commands.has_permissions(administrator=True)
+async def set_welcome_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "welcome_channel_id", channel.id)
+    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
+
+@bot.command(name="setmodlog")
+@commands.has_permissions(administrator=True)
+async def set_modlog_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "modlog_channel_id", channel.id)
+    await ctx.send(f"✅ Moderation log channel set to {channel.mention}")
+
+@bot.command(name="setdmcategory")
+@commands.has_permissions(administrator=True)
+async def set_dm_category(ctx, category: discord.CategoryChannel):
+    set_guild_setting(ctx.guild.id, "dm_category_id", category.id)
+    await ctx.send(f"✅ DM category set to {category.mention}")
+
+@bot.command(name="setafk")
+@commands.has_permissions(administrator=True)
+async def set_afk_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "afk_channel_id", channel.id)
+    await ctx.send(f"✅ AFK channel set to {channel.mention}")
+
+@bot.command(name="setaichannel")
+@commands.has_permissions(administrator=True)
+async def set_ai_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
+    await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
