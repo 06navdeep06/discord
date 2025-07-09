@@ -2,3 +2,5 @@ discord.py
 Flask
 requests 
 pymongo[srv] 
+aiohttp
+psutil 
