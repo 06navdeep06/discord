@@ -21,6 +21,18 @@ import psutil
 import traceback
 from io import BytesIO
 
+
+WELCOME_GIFS = [
+    "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
+    "https://media.giphy.com/media/OkJat1YNdoD3W/giphy.gif",
+    "https://media.giphy.com/media/hvRJCLFzcasrR4ia7z/giphy.gif",
+    "https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif",
+    "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
+    "https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif",
+    "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif"
+]
+
 # --- Response Post-processing ---
 def postprocess_response(text, recent_endings: Optional[list] = None):
     """Trim or rephrase if the response ends with a question or repetitive phrase."""
@@ -547,18 +559,7 @@ async def on_member_join(member):
                 title="🎃 Welcome to the Spooky Server!",
                 description=welcome_text,
                 color=0x00ff88)
-            # List of popular welcome GIFs from the web
-            welcome_gifs = [
-                "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
-                "https://media.giphy.com/media/OkJat1YNdoD3W/giphy.gif",
-                "https://media.giphy.com/media/hvRJCLFzcasrR4ia7z/giphy.gif",
-                "https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif",
-                "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
-                "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
-                "https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif",
-                "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif"
-            ]
-            gif_url = random.choice(welcome_gifs)
+            gif_url = random.choice(WELCOME_GIFS)
             embed.set_image(url=gif_url)
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.set_footer(text=f"Member #{member.guild.member_count}")
@@ -575,9 +576,16 @@ async def on_member_join(member):
                     "Enjoy your stay! 💖\n\n"
                     "- MIKU-BOT"
                 )
-                gif_url = random.choice(WELCOME_GIFS)
+                # Debug log for GIF selection
+                if WELCOME_GIFS:
+                    gif_url = random.choice(WELCOME_GIFS)
+                    logger.info(f"Selected welcome GIF for DM: {gif_url}")
+                else:
+                    gif_url = None
+                    logger.warning("WELCOME_GIFS list is empty! No GIF will be sent in DM.")
                 await member.send(welcome_text)
-                await member.send(gif_url)
+                if gif_url:
+                    await member.send(gif_url)
             except Exception as e:
                 logger.error(f"Failed to send welcome DM to {member.display_name}: {e}")
     except Exception as e:
@@ -700,21 +708,34 @@ async def on_voice_state_update(member, before, after):
         # User left a voice channel or switched
         elif before.channel and (not after.channel
                                  or before.channel != after.channel):
-            if voice_activity_today[user_id]["join_time"]:
-                time_spent = (discord.utils.utcnow() -
-                              voice_activity_today[user_id]["join_time"]
-                              ).total_seconds()
+            join_time = voice_activity_today[user_id]["join_time"]
+            now = discord.utils.utcnow()
+            # Ensure both are naive or both are aware
+            if join_time is not None:
+                if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
+                    # join_time is aware, make now aware if not
+                    if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+                        now = now.replace(tzinfo=datetime.timezone.utc)
+                else:
+                    # join_time is naive, make now naive
+                    if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
+                        now = now.replace(tzinfo=None)
+                time_spent = (now - join_time).total_seconds()
                 voice_activity_today[user_id]["total_time"] += time_spent
-                voice_activity_today[user_id][
-                    "join_time"] = None if not after.channel else discord.utils.utcnow(
-                    )
+                voice_activity_today[user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
 
         # User switched channels (reset join time if still in voice)
         elif before.channel and after.channel and before.channel != after.channel:
-            if voice_activity_today[user_id]["join_time"]:
-                time_spent = (discord.utils.utcnow() -
-                              voice_activity_today[user_id]["join_time"]
-                              ).total_seconds()
+            join_time = voice_activity_today[user_id]["join_time"]
+            now = discord.utils.utcnow()
+            if join_time is not None:
+                if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
+                    if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
+                        now = now.replace(tzinfo=datetime.timezone.utc)
+                else:
+                    if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
+                        now = now.replace(tzinfo=None)
+                time_spent = (now - join_time).total_seconds()
                 voice_activity_today[user_id]["total_time"] += time_spent
             voice_activity_today[user_id]["join_time"] = discord.utils.utcnow()
 
@@ -3147,15 +3168,3 @@ else:
         logger.error("❌ Invalid Discord token!")
     except Exception as e:
         logger.error(f"❌ Bot startup error: {e}")
-
-# Add this near other global GIF lists at the top of the file
-WELCOME_GIFS = [
-    "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
-    "https://media.giphy.com/media/OkJat1YNdoD3W/giphy.gif",
-    "https://media.giphy.com/media/hvRJCLFzcasrR4ia7z/giphy.gif",
-    "https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif",
-    "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
-    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
-    "https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif",
-    "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif"
-]
