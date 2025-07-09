@@ -566,6 +566,20 @@ async def on_member_join(member):
 
             await welcome_channel.send(embed=embed, content=f"Welcome {member.mention}!")
             logger.info(f"Welcomed new member: {member.display_name}")
+            # Send a DM to the new member
+            try:
+                welcome_text = (
+                    "Hey there! 🎉\n\n"
+                    "Welcome to **Miku Server**! We're excited to have you join our community.\n"
+                    "Feel free to ask any questions or just say hi—everyone here is super friendly!\n\n"
+                    "Enjoy your stay! 💖\n\n"
+                    "- MIKU-BOT"
+                )
+                gif_url = random.choice(WELCOME_GIFS)
+                await member.send(welcome_text)
+                await member.send(gif_url)
+            except Exception as e:
+                logger.error(f"Failed to send welcome DM to {member.display_name}: {e}")
     except Exception as e:
         logger.error(f"Error welcoming member {member.display_name}: {e}")
 
@@ -661,6 +675,7 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ This command can only be used in servers!")
     else:
         logger.error(f"Unhandled command error: {error}")
+        logger.error(f"Command error traceback: {traceback.format_exc()}")
         await ctx.send("❌ An unexpected error occurred while processing your command.")
 
 
@@ -810,14 +825,56 @@ async def on_voice_state_update(member, before, after):
         logger.error(f"Unexpected error in voice state update: {e}")
 
 
+# --- Auto-moderation function ---
+async def auto_moderate(message: discord.Message):
+    """Auto-moderation checks for messages"""
+    try:
+        # Skip if user has manage messages permission
+        if message.author.guild_permissions.manage_messages:
+            return
+        content = message.content
+        user_id = str(message.author.id)
+        # Caps check
+        if len(content) > 10:
+            caps_count = sum(1 for c in content if c.isupper())
+            caps_ratio = caps_count / len(content)
+            if caps_ratio > AUTO_MODERATION["caps_threshold"]:
+                await message.channel.send(f"⚠️ {message.author.mention}, please don't use excessive caps!")
+                return
+        # Banned words check
+        content_lower = content.lower()
+        for word in AUTO_MODERATION["banned_words"]:
+            if word in content_lower:
+                await message.delete()
+                await message.channel.send(f"🚫 {message.author.mention}, that word is not allowed!")
+                return
+        # Spam detection
+        now = time.time()
+        if user_id not in message_cooldowns:
+            message_cooldowns[user_id] = []
+        message_cooldowns[user_id].append(now)
+        # Remove old messages (older than 10 seconds)
+        message_cooldowns[user_id] = [t for t in message_cooldowns[user_id] if now - t < 10]
+        if len(message_cooldowns[user_id]) > AUTO_MODERATION["spam_threshold"]:
+            await message.channel.send(f"⚠️ {message.author.mention}, please slow down your messages!")
+            return
+    except Exception as e:
+        logger.error(f"Error in auto-moderation: {e}")
+
+
 @bot.event
 async def on_message(message):
-    """Handle incoming messages and trigger AI/Miku responses as needed."""
     try:
+        # Safe channel name for logging
+        channel_info = getattr(message.channel, 'name', None)
+        if not channel_info:
+            channel_info = f"{type(message.channel).__name__} (ID: {getattr(message.channel, 'id', 'N/A')})"
+        logger.info(f"Processing message from {message.author.display_name} in {channel_info}")
+
         if message.author == bot.user:
             return  # Ignore messages from the bot itself
 
-        # Handle DM replies from users
+        # If this is a DM from a user, handle DM reply and return
         if isinstance(message.channel, discord.DMChannel):
             await handle_dm_reply(message)
             return
@@ -826,10 +883,19 @@ async def on_message(message):
         server_stats["messages_today"] += 1
 
         # Auto-moderation checks
-        await auto_moderate(message)
+        try:
+            await auto_moderate(message)
+        except Exception as e:
+            logger.error(f"Error in auto_moderate: {e}")
+            logger.error(f"Auto-moderation traceback: {traceback.format_exc()}")
 
         # Always use recent channel history for context
-        history = await get_recent_channel_history(message.channel, bot.user, message, limit=20)
+        try:
+            history = await get_recent_channel_history(message.channel, bot.user, message, limit=20)
+        except Exception as e:
+            logger.error(f"Error getting channel history: {e}")
+            logger.error(f"Channel history traceback: {traceback.format_exc()}")
+            history = []
 
         # Track recent endings for anti-repetition
         if not hasattr(bot, '_recent_endings'):
@@ -840,7 +906,12 @@ async def on_message(message):
         if message.channel.id == 1391673946386075678:
             # Only respond to normal messages (not commands)
             if not message.content.startswith("!"):
-                ai_response = await fetch_llama4_response(message.content, user=message.author, history=history)
+                try:
+                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history)
+                except Exception as e:
+                    logger.error(f"Error in AI response: {e}")
+                    logger.error(f"AI response traceback: {traceback.format_exc()}")
+                    ai_response = None
                 if ai_response and isinstance(ai_response, str):
                     processed = postprocess_response(ai_response, recent_endings)
                     # Save ending for next time
@@ -1011,6 +1082,7 @@ async def on_message(message):
 
     except Exception as e:
         logger.error(f"Error in message event: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
 
 
 async def handle_dm_reply(message: discord.Message):
@@ -1071,17 +1143,6 @@ async def handle_dm_reply(message: discord.Message):
         
         # Send to staff channel
         await staff_channel.send(embed=forward_embed)
-        
-        # Send confirmation to user
-        confirm_embed = discord.Embed(
-            title="✅ Message Sent",
-            description="Your message has been forwarded to server staff. They will respond shortly.",
-            color=0x00ff00
-        )
-        confirm_embed.set_footer(text="Staff will reply to you soon")
-        confirm_embed.timestamp = discord.utils.utcnow()
-        
-        await message.channel.send(embed=confirm_embed)
         
         # Save conversation data
         save_all_data()
@@ -1189,6 +1250,8 @@ async def voice_activity(ctx):
     for user_id, data in voice_activity_today.items():
         total_time = data["total_time"]
         join_time = data.get("join_time")
+        if join_time and getattr(join_time, 'tzinfo', None) is not None:
+            join_time = join_time.replace(tzinfo=None)
         if join_time:
             # Add ongoing session time
             total_time += (now - join_time).total_seconds()
@@ -3085,38 +3148,14 @@ else:
     except Exception as e:
         logger.error(f"❌ Bot startup error: {e}")
 
-# Auto-moderation function
-async def auto_moderate(message: discord.Message):
-    """Auto-moderation checks for messages"""
-    try:
-        # Skip if user has manage messages permission
-        if message.author.guild_permissions.manage_messages:
-            return
-        content = message.content
-        user_id = str(message.author.id)
-        # Caps check
-        if len(content) > 10:
-            caps_count = sum(1 for c in content if c.isupper())
-            caps_ratio = caps_count / len(content)
-            if caps_ratio > AUTO_MODERATION["caps_threshold"]:
-                await message.channel.send(f"⚠️ {message.author.mention}, please don't use excessive caps!")
-                return
-        # Banned words check
-        content_lower = content.lower()
-        for word in AUTO_MODERATION["banned_words"]:
-            if word in content_lower:
-                await message.delete()
-                await message.channel.send(f"🚫 {message.author.mention}, that word is not allowed!")
-                return
-        # Spam detection
-        now = time.time()
-        if user_id not in message_cooldowns:
-            message_cooldowns[user_id] = []
-        message_cooldowns[user_id].append(now)
-        # Remove old messages (older than 10 seconds)
-        message_cooldowns[user_id] = [t for t in message_cooldowns[user_id] if now - t < 10]
-        if len(message_cooldowns[user_id]) > AUTO_MODERATION["spam_threshold"]:
-            await message.channel.send(f"⚠️ {message.author.mention}, please slow down your messages!")
-            return
-    except Exception as e:
-        logger.error(f"Error in auto-moderation: {e}")
+# Add this near other global GIF lists at the top of the file
+WELCOME_GIFS = [
+    "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
+    "https://media.giphy.com/media/OkJat1YNdoD3W/giphy.gif",
+    "https://media.giphy.com/media/hvRJCLFzcasrR4ia7z/giphy.gif",
+    "https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif",
+    "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+    "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
+    "https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif",
+    "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif"
+]
