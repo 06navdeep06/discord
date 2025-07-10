@@ -951,10 +951,6 @@ async def on_message(message):
         recent_endings = bot._recent_endings[-3:]
 
         # --- Refactor AI/Miku channel ID to use per-guild settings ---
-
-        # In on_message, replace:
-        # if message.channel.id == 1391673946386075678:
-        # with:
         settings = get_guild_settings(message.guild.id)
         ai_channel_id = settings.get("ai_channel_id")
         if ai_channel_id and message.channel.id == ai_channel_id:
@@ -978,7 +974,7 @@ async def on_message(message):
                         logger.error("Tried to reply to a message that no longer exists.")
                     except discord.HTTPException as e:
                         logger.error(f"Failed to reply: {e}")
-                    return
+                    return  # <--- Ensure we return after replying
                 # Fallback to MikuResponder if Llama 4 fails
                 miku_memory.add_message(message.author.id, message.content)
                 recent = miku_memory.get_recent(message.author.id)
@@ -998,7 +994,7 @@ async def on_message(message):
                     logger.error("Tried to reply to a message that no longer exists.")
                 except discord.HTTPException as e:
                     logger.error(f"Failed to reply: {e}")
-                return
+                return  # <--- Ensure we return after replying
 
         # If not configured, prompt admin (once per session or with a cooldown)
         if not ai_channel_id and message.content.startswith("!miku"):  # Example fallback
@@ -1006,6 +1002,7 @@ async def on_message(message):
                 await message.channel.send(
                     "❗ AI/Miku channel is not configured. Please set it up with `!setaichannel #channel` (admin only)."
                 )
+                return  # <--- Prevent further processing
 
         miku_memory.add_message(message.author.id, message.content)
         recent = miku_memory.get_recent(message.author.id)
@@ -1015,7 +1012,7 @@ async def on_message(message):
         greetings = ["hello", "hi", "hey", "namaste", "yo", "sup", "wassup"]
         if (
             message.channel.id != 1363907470010880080 and
-            any(re.search(rf'\b{{re.escape(word)}}\b', message.content, re.IGNORECASE) for word in greetings)
+            any(re.search(rf'\\b{{re.escape(word)}}\\b', message.content, re.IGNORECASE) for word in greetings)
         ):
             context = "greeting"
             response, gif = miku_responder.get_response(context, user=message.author, last_message=recent[-2] if len(recent) > 1 else None, character=character)
@@ -1029,7 +1026,7 @@ async def on_message(message):
             async with message.channel.typing():
                 await asyncio.sleep(random.uniform(0.5, 1.5))
                 await message.reply(embed=embed)
-            return
+            return  # <--- Ensure we return after replying
 
         # Check for bot mention (reply feature)
         if bot.user.mentioned_in(message) and not message.mention_everyone:
@@ -1045,7 +1042,7 @@ async def on_message(message):
             async with message.channel.typing():
                 await asyncio.sleep(random.uniform(0.5, 1.5))
                 await message.reply(embed=embed)
-            return
+            return  # <--- Ensure we return after replying
 
         # Check for specific keywords
         message_lower = message.content.lower()
@@ -1057,7 +1054,7 @@ async def on_message(message):
             embed = discord.Embed(description=response, color=0xff1744)
             embed.set_image(url=gif_url)
             await message.reply(embed=embed)
-            return
+            return  # <--- Ensure we return after replying
 
         # Check for "oj" or "OJ"
         if re.search(r'\boj\b', message_lower) or re.search(
@@ -1067,7 +1064,7 @@ async def on_message(message):
             embed = discord.Embed(description=response, color=0xff1744)
             embed.set_image(url=gif_url)
             await message.reply(embed=embed)
-            return
+            return  # <--- Ensure we return after replying
 
         # Check for "REI" or "Rei"
         if "rei" in message_lower:
@@ -1076,7 +1073,7 @@ async def on_message(message):
             embed = discord.Embed(description=response, color=0xff1744)
             embed.set_image(url=gif_url)
             await message.reply(embed=embed)
-            return
+            return  # <--- Ensure we return after replying
 
         if "@everyone" in message.content:
             user_id = str(message.author.id)
@@ -1098,6 +1095,7 @@ async def on_message(message):
                 )
 
             save_all_data()
+            return  # <--- Ensure we return after replying
 
         # Mention spam protection
         now_ts = discord.utils.utcnow().timestamp()
@@ -1133,10 +1131,10 @@ async def on_message(message):
                         del mention_spam_warnings[key]
 
             save_all_data()
+            return  # <--- Ensure we return after replying
 
-        await bot.process_commands(
-            message)  # Process commands after checking message content
-        
+        # Only process commands if no custom reply was sent
+        await bot.process_commands(message)
         # Track command usage
         if message.content.startswith("!"):
             server_stats["commands_used"] += 1
