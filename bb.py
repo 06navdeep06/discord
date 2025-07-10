@@ -11,7 +11,11 @@ import time
 import requests  # Add this import for Wikipedia API
 from urllib.parse import quote  # Correct import for quote
 import json  # For Google AI API
-from pymongo import MongoClient
+try:
+    from pymongo import MongoClient
+except ImportError:
+    MongoClient = None
+    print("Warning: pymongo not installed. Database features will be disabled.")
 from typing import Optional
 import aiohttp
 import datetime
@@ -499,8 +503,9 @@ async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = No
         "messages": messages
     }
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(FIREWORKS_API_URL, headers=headers, json=data, timeout=15) as resp:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(FIREWORKS_API_URL, headers=headers, json=data) as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     if "choices" in result and result["choices"]:
@@ -515,17 +520,18 @@ async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = No
 
 @bot.event
 async def on_ready():
-    logger.info(f"✅ Logged in as {bot.user.name}")
+    if bot.user:
+        logger.info(f"✅ Logged in as {bot.user.name}")
     logger.info(f"Bot is in {len(bot.guilds)} guilds")
     
     # Set bot startup time for uptime tracking
-    bot.start_time = discord.utils.utcnow()
+    setattr(bot, 'start_time', discord.utils.utcnow())
     
     # Initialize bot attributes
     if not hasattr(bot, 'user_themes'):
-        bot.user_themes = {}
+        setattr(bot, 'user_themes', {})
     if not hasattr(bot, '_recent_endings'):
-        bot._recent_endings = []
+        setattr(bot, '_recent_endings', [])
     
     bot.loop.create_task(heartbeat())
     bot.loop.create_task(reset_voice_activity())
@@ -584,7 +590,8 @@ async def on_member_join(member):
             embed.set_footer(text=f"Member #{member.guild.member_count}")
             embed.timestamp = discord.utils.utcnow()
 
-            await welcome_channel.send(embed=embed, content=f"Welcome {member.mention}!")
+            if isinstance(welcome_channel, discord.TextChannel):
+                await welcome_channel.send(embed=embed, content=f"Welcome {member.mention}!")
             logger.info(f"Welcomed new member: {member.display_name}")
             # Send a DM to the new member
             try:
@@ -629,7 +636,8 @@ async def on_member_remove(member):
             embed.add_field(name="Joined", value=discord.utils.format_dt(member.joined_at, style='D'), inline=True)
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.timestamp = discord.utils.utcnow()
-            await mod_channel.send(embed=embed)
+            if isinstance(mod_channel, discord.TextChannel):
+                await mod_channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error handling member leave: {e}")
 
@@ -650,7 +658,8 @@ async def on_message_delete(message):
             embed.add_field(name="Content", value=message.content[:1000] + "..." if len(message.content) > 1000 else message.content, inline=False)
             embed.set_thumbnail(url=message.author.display_avatar.url)
             embed.timestamp = discord.utils.utcnow()
-            await mod_channel.send(embed=embed)
+            if isinstance(mod_channel, discord.TextChannel):
+                await mod_channel.send(embed=embed)
     except Exception as e:
         logger.error(f"Error handling message deletion: {e}")
 
@@ -790,9 +799,9 @@ async def on_voice_state_update(member, before, after):
                         return
                     try:
                         channel_name = f"{name} | {member.display_name}"
-                        if hasattr(bot, 'user_themes') and str(
-                                member.id) in bot.user_themes:
-                            theme = bot.user_themes[str(member.id)]
+                        user_themes = getattr(bot, 'user_themes', {})
+                        if str(member.id) in user_themes:
+                            theme = user_themes[str(member.id)]
                             channel_name = f"{theme['emoji']} {theme['data']['name']} | {member.display_name}"
                         new_vc = await guild.create_voice_channel(
                             name=channel_name,
@@ -3094,6 +3103,7 @@ def load_all_data() -> None:
     if db is None:
         logger.warning("Database not available, skipping load")
         return
+
         
     try:
         # Load miku_memory
@@ -3175,6 +3185,50 @@ def load_all_data() -> None:
         logger.info("All data loaded successfully")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
+# --- Admin Setup Commands for Per-Guild Settings ---
+
+@bot.command(name="setwelcome")
+@commands.has_permissions(administrator=True)
+async def set_welcome_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "welcome_channel_id", channel.id)
+    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
+
+@bot.command(name="setmodlog")
+@commands.has_permissions(administrator=True)
+async def set_modlog_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "modlog_channel_id", channel.id)
+    await ctx.send(f"✅ Moderation log channel set to {channel.mention}")
+
+@bot.command(name="setdmcategory")
+@commands.has_permissions(administrator=True)
+async def set_dm_category(ctx, category_id: str):
+    try:
+        category_id_int = int(category_id)
+    except ValueError:
+        await ctx.send("❌ Please provide a valid numeric category ID.")
+        return
+    category = ctx.guild.get_channel(category_id_int)
+    if not category:
+        await ctx.send("❌ No channel or category found with that ID! Make sure you copied the **category** ID (not a text/voice channel).")
+        return
+    if not isinstance(category, discord.CategoryChannel):
+        await ctx.send(f"❌ That ID is for a `{type(category).__name__}` not a category! Please provide a valid **category** ID.")
+        return
+    set_guild_setting(ctx.guild.id, "dm_category_id", category.id)
+    await ctx.send(f"✅ DM category set to **{category.name}** (ID: `{category.id}`)")
+
+@bot.command(name="setafk")
+@commands.has_permissions(administrator=True)
+async def set_afk_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "afk_channel_id", channel.id)
+    await ctx.send(f"✅ AFK channel set to {channel.mention}")
+
+@bot.command(name="setaichannel")
+@commands.has_permissions(administrator=True)
+async def set_ai_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
+    await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
+
 
 # --- DM System ---
 # Track active DM conversations
@@ -3195,36 +3249,3 @@ else:
         logger.error("❌ Invalid Discord token!")
     except Exception as e:
         logger.error(f"❌ Bot startup error: {e}")
-
-
-# --- Admin Setup Commands for Per-Guild Settings ---
-
-@bot.command(name="setwelcome")
-@commands.has_permissions(administrator=True)
-async def set_welcome_channel(ctx, channel: discord.TextChannel):
-    set_guild_setting(ctx.guild.id, "welcome_channel_id", channel.id)
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
-
-@bot.command(name="setmodlog")
-@commands.has_permissions(administrator=True)
-async def set_modlog_channel(ctx, channel: discord.TextChannel):
-    set_guild_setting(ctx.guild.id, "modlog_channel_id", channel.id)
-    await ctx.send(f"✅ Moderation log channel set to {channel.mention}")
-
-@bot.command(name="setdmcategory")
-@commands.has_permissions(administrator=True)
-async def set_dm_category(ctx, category: discord.CategoryChannel):
-    set_guild_setting(ctx.guild.id, "dm_category_id", category.id)
-    await ctx.send(f"✅ DM category set to {category.mention}")
-
-@bot.command(name="setafk")
-@commands.has_permissions(administrator=True)
-async def set_afk_channel(ctx, channel: discord.VoiceChannel):
-    set_guild_setting(ctx.guild.id, "afk_channel_id", channel.id)
-    await ctx.send(f"✅ AFK channel set to {channel.mention}")
-
-@bot.command(name="setaichannel")
-@commands.has_permissions(administrator=True)
-async def set_ai_channel(ctx, channel: discord.TextChannel):
-    set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
-    await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
