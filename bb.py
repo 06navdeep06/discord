@@ -221,7 +221,7 @@ created_channels = {}
 channel_stats = {"total_created": 0, "user_activity": {}}
 
 # Gaming Features
-voice_activity_today = {}  # Track daily voice activity
+voice_activity_today = {}  # {guild_id: {user_id: ...}}
 channel_themes = {
     "🎮": {
         "name": "Gaming",
@@ -576,6 +576,21 @@ async def on_ready():
     if not hasattr(bot, '_recent_endings'):
         setattr(bot, '_recent_endings', [])
     
+    # --- NEW: Initialize voice activity for all users currently in voice channels ---
+    for guild in bot.guilds:
+        guild_id = guild.id
+        if guild_id not in voice_activity_today:
+            voice_activity_today[guild_id] = {}
+        for channel in guild.voice_channels:
+            for member in channel.members:
+                user_id = str(member.id)
+                if user_id not in voice_activity_today[guild_id]:
+                    voice_activity_today[guild_id][user_id] = {
+                        "name": member.display_name,
+                        "join_time": discord.utils.utcnow(),  # treat as just joined
+                        "total_time": 0
+                    }
+    
     bot.loop.create_task(heartbeat())
     bot.loop.create_task(reset_voice_activity())
     bot.loop.create_task(reset_daily_stats())
@@ -762,12 +777,12 @@ async def on_command_error(ctx, error):
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
-        # Track voice activity for today
+        guild_id = member.guild.id
         user_id = str(member.id)
-        today = discord.utils.utcnow().strftime("%Y-%m-%d")
-
-        if user_id not in voice_activity_today:
-            voice_activity_today[user_id] = {
+        if guild_id not in voice_activity_today:
+            voice_activity_today[guild_id] = {}
+        if user_id not in voice_activity_today[guild_id]:
+            voice_activity_today[guild_id][user_id] = {
                 "name": member.display_name,
                 "join_time": None,
                 "total_time": 0
@@ -775,11 +790,11 @@ async def on_voice_state_update(member, before, after):
 
         # User joined a voice channel
         if after.channel and not before.channel:
-            voice_activity_today[user_id]["join_time"] = discord.utils.utcnow()
+            voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
 
         # User left a voice channel or switched
         elif before.channel and (not after.channel or before.channel != after.channel):
-            join_time = voice_activity_today[user_id]["join_time"]
+            join_time = voice_activity_today[guild_id][user_id]["join_time"]
             now = discord.utils.utcnow()
             if join_time is not None:
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
@@ -789,12 +804,12 @@ async def on_voice_state_update(member, before, after):
                     if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
                         now = now.replace(tzinfo=None)
                 time_spent = (now - join_time).total_seconds()
-                voice_activity_today[user_id]["total_time"] += time_spent
-                voice_activity_today[user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
+                voice_activity_today[guild_id][user_id]["total_time"] += time_spent
+                voice_activity_today[guild_id][user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
 
         # User switched channels (reset join time if still in voice)
         elif before.channel and after.channel and before.channel != after.channel:
-            join_time = voice_activity_today[user_id]["join_time"]
+            join_time = voice_activity_today[guild_id][user_id]["join_time"]
             now = discord.utils.utcnow()
             if join_time is not None:
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
@@ -804,8 +819,8 @@ async def on_voice_state_update(member, before, after):
                     if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
                         now = now.replace(tzinfo=None)
                 time_spent = (now - join_time).total_seconds()
-                voice_activity_today[user_id]["total_time"] += time_spent
-            voice_activity_today[user_id]["join_time"] = discord.utils.utcnow()
+                voice_activity_today[guild_id][user_id]["total_time"] += time_spent
+            voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
 
         # Use per-guild AFK channel
         settings = get_guild_settings(member.guild.id)
@@ -1215,6 +1230,7 @@ async def handle_dm_reply(message: discord.Message):
         # Update last message in conversation
         conversation["last_message"] = message.content
         
+
         # Create embed to forward to staff
         forward_embed = discord.Embed(
             title="📨 DM Reply Received",
@@ -1298,17 +1314,14 @@ async def vcstats(ctx):
                         inline=False)
 
     # Template channel usage
-    template_usage = {}
-    for user_data in channel_stats["user_activity"].values():
-        for template in TEMPLATE_CHANNELS.keys():
-            if template not in template_usage:
-                template_usage[template] = 0
-
+    template_channels = get_template_channels(ctx.guild.id)
     template_text = ""
-    for template in TEMPLATE_CHANNELS.keys():
+    for template, info in template_channels.items():
+        if not info["id"]:
+            continue  # Skip if not set
         count = sum(1 for activity in channel_stats["user_activity"].values()
                     if activity["channels_created"] > 0)  # Simplified for now
-        template_text += f"**{template}:** Popular\n"
+        template_text += f"**{template}:** {'Set' if info['id'] else 'Not Set'}\n"
 
     embed.add_field(name="📋 Channel Types",
                     value=template_text or "No data yet",
@@ -1343,57 +1356,64 @@ async def cleanup(ctx):
 @bot.command(name="voiceactivity", aliases=["va"])
 async def voice_activity(ctx):
     """Show today's voice channel activity leaderboard with real-time accuracy"""
-    if not voice_activity_today:
-        await ctx.send("No voice activity recorded today!")
-        return
+    try:
+        guild_id = ctx.guild.id
+        if guild_id not in voice_activity_today or not voice_activity_today[guild_id]:
+            await ctx.send("No voice activity recorded today!")
+            return
 
-    now = discord.utils.utcnow()
-    up_to_date_activity = {}
-    for user_id, data in voice_activity_today.items():
-        total_time = data["total_time"]
-        join_time = data.get("join_time")
-        if join_time and getattr(join_time, 'tzinfo', None) is not None:
-            join_time = join_time.replace(tzinfo=None)
-        if join_time:
-            # Add ongoing session time
-            total_time += (now - join_time).total_seconds()
-        up_to_date_activity[user_id] = {
-            "name": data["name"],
-            "total_time": total_time
-        }
+        now = discord.utils.utcnow()
+        up_to_date_activity = {}
+        for user_id, data in voice_activity_today[guild_id].items():
+            total_time = data.get("total_time", 0)
+            join_time = data.get("join_time")
+            naive_now = now.replace(tzinfo=None) if getattr(now, 'tzinfo', None) is not None else now
+            naive_join_time = join_time.replace(tzinfo=None) if join_time and getattr(join_time, 'tzinfo', None) is not None else join_time
+            if naive_join_time:
+                # Add ongoing session time
+                total_time += (naive_now - naive_join_time).total_seconds()
+            up_to_date_activity[user_id] = {
+                "name": data.get("name", f"User {user_id}"),
+                "total_time": total_time
+            }
 
-    sorted_activity = sorted(up_to_date_activity.items(),
-                             key=lambda x: x[1]["total_time"],
-                             reverse=True)[:10]
+        sorted_activity = sorted(up_to_date_activity.items(),
+                                 key=lambda x: x[1]["total_time"],
+                                 reverse=True)[:10]
 
-    embed = discord.Embed(
-        title="🎙️ Today's Voice Activity Leaders (Real-Time)",
-        description="Most active users in voice channels today (real-time)",
-        color=0x00ff88)
+        embed = discord.Embed(
+            title="🎙️ Today's Voice Activity Leaders (Real-Time)",
+            description="Most active users in voice channels today (real-time)",
+            color=0x00ff88)
 
-    leaderboard_text = ""
-    titles = [
-        "Pioneer", "Trailblazer", "Innovator", "Champion", "Elite", "Vanguard",
-        "Topper", "Winner", "Distinction", "Honor"
-    ]
-    for i, (user_id, data) in enumerate(sorted_activity, 1):
-        hours = int(data["total_time"] // 3600)
-        minutes = int((data["total_time"] % 3600) // 60)
-        time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
-        title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-        leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
+        leaderboard_text = ""
+        titles = [
+            "Pioneer", "Trailblazer", "Innovator", "Champion", "Elite", "Vanguard",
+            "Topper", "Winner", "Distinction", "Honor"
+        ]
+        for i, (user_id, data) in enumerate(sorted_activity, 1):
+            hours = int(data["total_time"] // 3600)
+            minutes = int((data["total_time"] % 3600) // 60)
+            time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+            title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
+            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+            leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
 
-    embed.add_field(name="🏆 Leaderboard",
-                    value=leaderboard_text or "No data",
-                    inline=False)
-    embed.add_field(name="Prize",
-                    value="Top 3 get bragging rights! 🎉",
-                    inline=False)
-    embed.set_footer(text="Resets daily at midnight UTC")
-    embed.timestamp = discord.utils.utcnow()
+        embed.add_field(name="🏆 Leaderboard",
+                        value=leaderboard_text or "No data",
+                        inline=False)
+        embed.add_field(name="Prize",
+                        value="Top 3 get bragging rights! 🎉",
+                        inline=False)
+        embed.set_footer(text="Resets daily at midnight UTC")
+        embed.timestamp = discord.utils.utcnow()
 
-    await ctx.send(embed=embed)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        await ctx.send(f"❌ Error: {e}\n```{tb[-500:]}```")
+        print(tb)
 
 
 @bot.command(name="theme")
@@ -3106,6 +3126,12 @@ else:
     db = None
 
 # --- Persistence Functions ---
+def stringify_keys(d):
+    """Recursively convert all dict keys to strings."""
+    if isinstance(d, dict):
+        return {str(k): stringify_keys(v) for k, v in d.items()}
+    return d
+
 def save_all_data() -> None:
     if db is None:
         logger.warning("Database not available, skipping save")
@@ -3121,7 +3147,7 @@ def save_all_data() -> None:
         # Save voice_activity_today
         db.voice_activity.delete_many({})
         if voice_activity_today:
-            db.voice_activity.insert_one({"data": voice_activity_today})
+            db.voice_activity.insert_one({"data": stringify_keys(voice_activity_today)})
         
         # Save channel_stats
         db.channel_stats.delete_many({})
@@ -3241,7 +3267,7 @@ def load_all_data() -> None:
         doc = db.warnings_db.find_one()
         if doc:
             WARNINGS_DB.update(doc["data"])
-        
+
         # Load server_stats
         doc = db.server_stats.find_one()
         if doc:
@@ -3273,6 +3299,32 @@ def load_all_data() -> None:
         logger.info("All data loaded successfully")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
+
+# --- Admin Setup Commands for Template Voice Channels ---
+@bot.command(name="setduochannel")
+@commands.has_permissions(administrator=True)
+async def set_duo_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "duo_channel_id", channel.id)
+    await ctx.send(f"✅ Duo template channel set to {channel.mention}")
+
+@bot.command(name="settriochannel")
+@commands.has_permissions(administrator=True)
+async def set_trio_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "trio_channel_id", channel.id)
+    await ctx.send(f"✅ Trio template channel set to {channel.mention}")
+
+@bot.command(name="setsquadchannel")
+@commands.has_permissions(administrator=True)
+async def set_squad_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "squad_channel_id", channel.id)
+    await ctx.send(f"✅ Squad template channel set to {channel.mention}")
+
+@bot.command(name="setteamchannel")
+@commands.has_permissions(administrator=True)
+async def set_team_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "team_channel_id", channel.id)
+    await ctx.send(f"✅ Team template channel set to {channel.mention}")
+
 # --- Admin Setup Commands for Per-Guild Settings ---
 
 @bot.command(name="setwelcome")
@@ -3377,28 +3429,3 @@ def get_template_channels(guild_id):
         "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
         "Team": {"id": settings.get("team_channel_id"), "limit": 12},
     }
-
-# --- Admin Setup Commands for Template Voice Channels ---
-@bot.command(name="setduochannel")
-@commands.has_permissions(administrator=True)
-async def set_duo_channel(ctx, channel: discord.VoiceChannel):
-    set_guild_setting(ctx.guild.id, "duo_channel_id", channel.id)
-    await ctx.send(f"✅ Duo template channel set to {channel.mention}")
-
-@bot.command(name="settriochannel")
-@commands.has_permissions(administrator=True)
-async def set_trio_channel(ctx, channel: discord.VoiceChannel):
-    set_guild_setting(ctx.guild.id, "trio_channel_id", channel.id)
-    await ctx.send(f"✅ Trio template channel set to {channel.mention}")
-
-@bot.command(name="setsquadchannel")
-@commands.has_permissions(administrator=True)
-async def set_squad_channel(ctx, channel: discord.VoiceChannel):
-    set_guild_setting(ctx.guild.id, "squad_channel_id", channel.id)
-    await ctx.send(f"✅ Squad template channel set to {channel.mention}")
-
-@bot.command(name="setteamchannel")
-@commands.has_permissions(administrator=True)
-async def set_team_channel(ctx, channel: discord.VoiceChannel):
-    set_guild_setting(ctx.guild.id, "team_channel_id", channel.id)
-    await ctx.send(f"✅ Team template channel set to {channel.mention}")

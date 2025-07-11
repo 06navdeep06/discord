@@ -87,6 +87,3 @@ Admins can set up template voice channels for automatic management:
 !setteamchannel #team-voice
 ```
 Set these to the appropriate voice channels in your server. The bot will use these for dynamic voice channel creation and management.
-
-## License
-[MIT License](LICENSE) (or your preferred license) 
