@@ -2185,7 +2185,10 @@ async def bot_info(ctx):
         ],
         "📝 Help": [
             "helpme", "invite", "support"
-        ]
+        ],
+        "🔧 Admin/Setup": [
+            "setduochannel", "settriochannel", "setsquadchannel", "setteamchannel"
+        ],
     }
     
     for category, commands_list in categories.items():
@@ -3365,3 +3368,37 @@ else:
         logger.error("❌ Invalid Discord token!")
     except Exception as e:
         logger.error(f"❌ Bot startup error: {e}")
+
+def get_template_channels(guild_id):
+    settings = get_guild_settings(guild_id)
+    return {
+        "Duo": {"id": settings.get("duo_channel_id"), "limit": 2},
+        "Trio": {"id": settings.get("trio_channel_id"), "limit": 3},
+        "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
+        "Team": {"id": settings.get("team_channel_id"), "limit": 12},
+    }
+
+# --- Admin Setup Commands for Template Voice Channels ---
+@bot.command(name="setduochannel")
+@commands.has_permissions(administrator=True)
+async def set_duo_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "duo_channel_id", channel.id)
+    await ctx.send(f"✅ Duo template channel set to {channel.mention}")
+
+@bot.command(name="settriochannel")
+@commands.has_permissions(administrator=True)
+async def set_trio_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "trio_channel_id", channel.id)
+    await ctx.send(f"✅ Trio template channel set to {channel.mention}")
+
+@bot.command(name="setsquadchannel")
+@commands.has_permissions(administrator=True)
+async def set_squad_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "squad_channel_id", channel.id)
+    await ctx.send(f"✅ Squad template channel set to {channel.mention}")
+
+@bot.command(name="setteamchannel")
+@commands.has_permissions(administrator=True)
+async def set_team_channel(ctx, channel: discord.VoiceChannel):
+    set_guild_setting(ctx.guild.id, "team_channel_id", channel.id)
+    await ctx.send(f"✅ Team template channel set to {channel.mention}")

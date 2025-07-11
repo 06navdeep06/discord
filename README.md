@@ -66,6 +66,7 @@ python bb.py
 
 ### Admin/Setup
 - `!status`, `!cleanup`, `!setwelcome`, `!setmodlog`, `!setdmcategory`, `!setafk`, `!setaichannel`, `!settimezone`
+- `!setduochannel`, `!settriochannel`, `!setsquadchannel`, `!setteamchannel`
 
 ### Help
 - `!helpme`, `!invite`, `!support`
@@ -76,6 +77,16 @@ Admins can set the server timezone using either a timezone (e.g., `Asia/Kathmand
 !settimezone Nepal
 !settimezone Asia/Kathmandu
 ```
+
+## Voice Channel Template Setup
+Admins can set up template voice channels for automatic management:
+```
+!setduochannel #duo-voice
+!settriochannel #trio-voice
+!setsquadchannel #squad-voice
+!setteamchannel #team-voice
+```
+Set these to the appropriate voice channels in your server. The bot will use these for dynamic voice channel creation and management.
 
 ## License
 [MIT License](LICENSE) (or your preferred license) 
