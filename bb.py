@@ -24,6 +24,8 @@ import platform
 import psutil
 import traceback
 from io import BytesIO
+import pytz  # For timezone support
+from countryinfo import CountryInfo  # For country to timezone mapping
 
 # --- Per-Guild Settings Helper Functions ---
 
@@ -42,7 +44,32 @@ def set_guild_setting(guild_id, key, value):
         upsert=True
     )
 
+def get_guild_timezone(guild_id):
+    settings = get_guild_settings(guild_id)
+    return settings.get("timezone", "UTC")  # Default to UTC
 
+def localize_time(dt, guild_id):
+    tzname = get_guild_timezone(guild_id)
+    try:
+        tz = pytz.timezone(tzname)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.utc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=pytz.utc)
+    return dt.astimezone(tz)
+
+# Helper to get or set conversation start time per guild
+conversation_start_times = {}
+
+def get_conversation_start(guild_id):
+    if guild_id not in conversation_start_times:
+        conversation_start_times[guild_id] = discord.utils.utcnow().replace(tzinfo=pytz.utc)
+    return conversation_start_times[guild_id]
+
+def get_conversation_duration(guild_id):
+    start = get_conversation_start(guild_id)
+    now = discord.utils.utcnow().replace(tzinfo=pytz.utc)
+    return now - start
 
 WELCOME_GIFS = [
     "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
@@ -473,6 +500,22 @@ system_prompt = (
     "Avoid ending every message with a question or similar phrase. Vary your sentence endings and do not always try to keep the conversation going artificially.\n"
     "You will forget everything when told to 'reset' and dont read earlier text at all.\n"
 )
+
+def get_system_prompt_with_timezone(guild_id):
+    tz = get_guild_timezone(guild_id)
+    return system_prompt + f"\nThe current server timezone is {tz}."
+
+def get_system_prompt_with_timezone_and_duration(guild_id):
+    tz = get_guild_timezone(guild_id)
+    now_utc = discord.utils.utcnow().replace(tzinfo=pytz.utc)
+    local_time = localize_time(now_utc, guild_id)
+    duration = get_conversation_duration(guild_id)
+    return (
+        system_prompt +
+        f"\nThe current server timezone is {tz}." +
+        f"\nThe local time is {local_time.strftime('%Y-%m-%d %H:%M:%S %Z')}." +
+        f"\nThe conversation has been going for {str(duration).split('.')[0]}."
+    )
 
 async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = None, history: Optional[list] = None, system_prompt: str = system_prompt) -> Optional[str]:
     if not FIREWORKS_API_KEY:
@@ -957,7 +1000,7 @@ async def on_message(message):
             # Only respond to normal messages (not commands)
             if not message.content.startswith("!"):
                 try:
-                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history)
+                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=get_system_prompt_with_timezone_and_duration(message.guild.id))
                 except Exception as e:
                     logger.error(f"Error in AI response: {e}")
                     logger.error(f"AI response traceback: {traceback.format_exc()}")
@@ -2059,7 +2102,7 @@ async def user_info(ctx, member: discord.Member = None):
 
 @bot.command(name="botinfo")
 async def bot_info(ctx):
-    """Display bot information and statistics"""
+    """Display bot information and statistics, including a categorized command list"""
     # Calculate uptime
     uptime = discord.utils.utcnow() - bot.start_time if hasattr(bot, 'start_time') else datetime.timedelta(0)
     uptime_str = str(uptime).split('.')[0]  # Remove microseconds
@@ -2115,6 +2158,50 @@ async def bot_info(ctx):
         name="📈 Today's Stats",
         value=f"**Messages:** {server_stats['messages_today']:,}\n**Commands:** {server_stats['commands_used']:,}\n**Joins:** {server_stats['users_joined']:,}",
         inline=True
+    )
+    
+    # --- Categorized Command List ---
+    categories = {
+        "🛡️ Moderation": [
+            "kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings", "warnings", "clearwarnings"
+        ],
+        "📊 Information": [
+            "serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar", "stats", "vcstats", "voiceactivity", "servertime"
+        ],
+        "🎮 Fun": [
+            "poll", "8ball", "coinflip", "dice", "miku"
+        ],
+        "⏰ Utility": [
+            "remind", "theme", "shape"
+        ],
+        "🎙️ Voice": [
+            "voiceactivity", "vcstats", "afk"
+        ],
+        "📨 DM System": [
+            "dm", "dmclose", "dmstatus", "dmhelp"
+        ],
+        "🔧 Admin": [
+            "status", "cleanup", "setwelcome", "setmodlog", "setdmcategory", "setafk", "setaichannel", "settimezone"
+        ],
+        "📝 Help": [
+            "helpme", "invite", "support"
+        ]
+    }
+    
+    for category, commands_list in categories.items():
+        # Filter out commands that don't exist
+        valid_commands = [cmd for cmd in commands_list if bot.get_command(cmd)]
+        if valid_commands:
+            embed.add_field(
+                name=category,
+                value=", ".join([f"`!{cmd}`" for cmd in valid_commands]),
+                inline=False
+            )
+    
+    embed.add_field(
+        name="📝 Note",
+        value="Some commands require specific permissions to use. Use `!helpme <command>` for details.",
+        inline=False
     )
     
     embed.set_footer(text=f"Requested by {ctx.author.display_name}")
@@ -3227,6 +3314,37 @@ async def set_ai_channel(ctx, channel: discord.TextChannel):
     set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
     await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
 
+@bot.command(name="settimezone")
+@commands.has_permissions(administrator=True)
+async def set_timezone(ctx, *, country_or_tz: str):
+    # Try as a timezone first
+    try:
+        pytz.timezone(country_or_tz)
+        set_guild_setting(ctx.guild.id, "timezone", country_or_tz)
+        await ctx.send(f"✅ Timezone set to `{country_or_tz}` for this server.")
+        return
+    except pytz.UnknownTimeZoneError:
+        pass
+    # Try as a country
+    try:
+        country = CountryInfo(country_or_tz)
+        country_code = country.iso()['alpha2']
+        timezones = pytz.country_timezones.get(country_code)
+        if not timezones:
+            await ctx.send("❌ No timezone found for that country.")
+            return
+        # If multiple, pick the first (or prompt user for more advanced logic)
+        tz = timezones[0]
+        set_guild_setting(ctx.guild.id, "timezone", tz)
+        await ctx.send(f"✅ Timezone for `{country_or_tz}` set to `{tz}` for this server.")
+    except Exception:
+        await ctx.send("❌ Unknown country or timezone! Example: `Nepal`, `India`, `USA`, `Asia/Kathmandu`.")
+
+@bot.command(name="servertime")
+async def server_time(ctx):
+    now_utc = discord.utils.utcnow().replace(tzinfo=pytz.utc)
+    local_time = localize_time(now_utc, ctx.guild.id)
+    await ctx.send(f"Server time: {local_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 # --- DM System ---
 # Track active DM conversations

@@ -3,3 +3,5 @@ requests
 pymongo[srv] 
 aiohttp
 psutil
+pytz
+countryinfo
