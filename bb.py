@@ -2585,7 +2585,7 @@ async def help_command(ctx, command_name: Optional[str] = None):
         if command.aliases:
             embed.add_field(name="Aliases", value=", ".join(command.aliases), inline=True)
         
-        if command.usage:
+        if hasattr(command, "usage") and command.usage:
             embed.add_field(name="Usage", value=f"!{command.name} {command.usage}", inline=True)
         
         embed.set_footer(text=f"Requested by {ctx.author.display_name}")
@@ -2600,6 +2600,7 @@ async def help_command(ctx, command_name: Optional[str] = None):
         
         # Categorize commands
         categories = {
+            "🎵 Music": ["play", "join", "leave"],
             "🛡️ Moderation": ["kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings"],
             "📊 Information": ["serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar"],
             "🎮 Fun": ["poll", "8ball", "coinflip", "dice", "miku"],
@@ -3236,6 +3237,7 @@ def save_all_data() -> None:
         db.message_cooldowns.delete_many({})
         if message_cooldowns:
             db.message_cooldowns.insert_one({"data": stringify_keys(message_cooldowns)})
+            
         
         # Save active_character_per_channel
         db.active_characters.delete_many({})
@@ -3250,6 +3252,8 @@ def save_all_data() -> None:
             dm_data = [{"user_id": str(k), "data": v} for k, v in active_dm_conversations.items()]
             if dm_data:
                 db.active_dm_conversations.insert_many(dm_data)
+        
+        
         
         # Save voice_activity_alltime
         db.voice_activity_alltime.delete_many({})
@@ -3464,33 +3468,6 @@ async def server_time(ctx):
 # Track active DM conversations
 active_dm_conversations = {}  # {user_id: {"channel_id": channel_id, "moderator_id": moderator_id, "start_time": timestamp}}
 
-# Load data on startup
-load_all_data()
-
-# Validate token before running
-token = os.getenv("TOKEN")
-if not token:
-    logger.error("❌ No TOKEN environment variable found!")
-    logger.error("Please set your Discord bot token in the Secrets tab.")
-else:
-    try:
-        bot.run(token)
-    except discord.LoginFailure:
-        logger.error("❌ Invalid Discord token!")
-    except Exception as e:
-        logger.error(f"❌ Bot startup error: {e}")
-
-def get_template_channels(guild_id):
-    if not guild_id or not isinstance(guild_id, (int, str)):
-        return {}
-    settings = get_guild_settings(guild_id)
-    return {
-        "Duo": {"id": settings.get("duo_channel_id"), "limit": 2},
-        "Trio": {"id": settings.get("trio_channel_id"), "limit": 3},
-        "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
-        "Team": {"id": settings.get("team_channel_id"), "limit": 12},
-    }
-
 # --- Music System ---
 music_queues = {}  # {guild_id: [track_dict, ...]}
 now_playing = {}   # {guild_id: track_dict}
@@ -3539,16 +3516,14 @@ async def ensure_voice(ctx):
         await ctx.voice_client.move_to(channel)
     return ctx.voice_client
 
-@bot.command(name="join")
+@bot.command(name="join", help="Join your voice channel.", usage="")
 async def join(ctx):
-    """Join your voice channel."""
     vc = await ensure_voice(ctx)
     if vc:
         await ctx.send(f"✅ Joined {vc.channel.mention}")
 
-@bot.command(name="leave")
+@bot.command(name="leave", help="Leave the voice channel.", usage="")
 async def leave(ctx):
-    """Leave the voice channel."""
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
         await ctx.send("👋 Left the voice channel.")
@@ -3568,9 +3543,8 @@ async def play_next(ctx):
     ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
     await ctx.send(f"🎶 Now playing: **{source.title}**")
 
-@bot.command(name="play")
+@bot.command(name="play", help="Play a song from YouTube or Spotify (url or search).", usage="<url or search>")
 async def play(ctx, *, url: str):
-    """Play a song from YouTube or Spotify (url or search)."""
     vc = await ensure_voice(ctx)
     if not vc:
         return
@@ -3618,3 +3592,31 @@ async def play(ctx, *, url: str):
         await play_next(ctx)
     else:
         await ctx.send(f"�� Added to queue!")
+
+# Load data on startup
+load_all_data()
+
+# Validate token before running
+token = os.getenv("TOKEN")
+if not token:
+    logger.error("❌ No TOKEN environment variable found!")
+    logger.error("Please set your Discord bot token in the Secrets tab.")
+else:
+    try:
+        bot.run(token)
+    except discord.LoginFailure:
+        logger.error("❌ Invalid Discord token!")
+    except Exception as e:
+        logger.error(f"❌ Bot startup error: {e}")
+
+def get_template_channels(guild_id):
+    if not guild_id or not isinstance(guild_id, (int, str)):
+        return {}
+    settings = get_guild_settings(guild_id)
+    return {
+        "Duo": {"id": settings.get("duo_channel_id"), "limit": 2},
+        "Trio": {"id": settings.get("trio_channel_id"), "limit": 3},
+        "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
+        "Team": {"id": settings.get("team_channel_id"), "limit": 12},
+    }
+
