@@ -25,7 +25,18 @@ import psutil
 import traceback
 from io import BytesIO
 import pytz  # For timezone support
-from countryinfo import CountryInfo  # For country to timezone mapping
+try:
+    from countryinfo import CountryInfo  # For country to timezone mapping
+except ImportError:
+    CountryInfo = None
+    print("Warning: countryinfo not installed. Country to timezone features will be disabled.")
+import yt_dlp
+try:
+    import spotipy
+    from spotipy.oauth2 import SpotifyClientCredentials
+except ImportError:
+    spotipy = None
+    SpotifyClientCredentials = None
 
 # --- Per-Guild Settings Helper Functions ---
 
@@ -222,6 +233,7 @@ channel_stats = {"total_created": 0, "user_activity": {}}
 
 # Gaming Features
 voice_activity_today = {}  # {guild_id: {user_id: ...}}
+voice_activity_alltime = {}  # {guild_id: {user_id: {"name": str, "total_time": float}}}
 channel_themes = {
     "🎮": {
         "name": "Gaming",
@@ -787,6 +799,13 @@ async def on_voice_state_update(member, before, after):
                 "join_time": None,
                 "total_time": 0
             }
+        if guild_id not in voice_activity_alltime:
+            voice_activity_alltime[guild_id] = {}
+        if user_id not in voice_activity_alltime[guild_id]:
+            voice_activity_alltime[guild_id][user_id] = {
+                "name": member.display_name,
+                "total_time": 0
+            }
 
         # User joined a voice channel
         if after.channel and not before.channel:
@@ -805,6 +824,9 @@ async def on_voice_state_update(member, before, after):
                         now = now.replace(tzinfo=None)
                 time_spent = (now - join_time).total_seconds()
                 voice_activity_today[guild_id][user_id]["total_time"] += time_spent
+                # --- Alltime update ---
+                voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
+                voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
                 voice_activity_today[guild_id][user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
 
         # User switched channels (reset join time if still in voice)
@@ -820,6 +842,9 @@ async def on_voice_state_update(member, before, after):
                         now = now.replace(tzinfo=None)
                 time_spent = (now - join_time).total_seconds()
                 voice_activity_today[guild_id][user_id]["total_time"] += time_spent
+                # --- Alltime update ---
+                voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
+                voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
             voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
 
         # Use per-guild AFK channel
@@ -1354,14 +1379,42 @@ async def cleanup(ctx):
 
 
 @bot.command(name="voiceactivity", aliases=["va"])
-async def voice_activity(ctx):
-    """Show today's voice channel activity leaderboard with real-time accuracy"""
+async def voice_activity(ctx, mode: str = None):
+    """Show today's or all-time voice channel activity leaderboard with real-time accuracy
+    Usage: !voiceactivity [alltime]
+    """
     try:
         guild_id = ctx.guild.id
+        if mode == "alltime":
+            if guild_id not in voice_activity_alltime or not voice_activity_alltime[guild_id]:
+                await ctx.send("No all-time voice activity recorded!")
+                return
+            sorted_activity = sorted(voice_activity_alltime[guild_id].items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
+            embed = discord.Embed(
+                title="🎙️ All-Time Voice Activity Leaders",
+                description="Most active users in voice channels (all-time)",
+                color=0xFFD700)
+            leaderboard_text = ""
+            titles = [
+                "Legend", "Veteran", "Master", "Pro", "Expert", "Ace", "Star", "Hero", "Icon", "MVP"
+            ]
+            for i, (user_id, data) in enumerate(sorted_activity, 1):
+                hours = int(data["total_time"] // 3600)
+                minutes = int((data["total_time"] % 3600) // 60)
+                time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+                title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
+                medal = "🏆" if i == 1 else f"{i}."
+                leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
+            embed.add_field(name="🏆 Leaderboard", value=leaderboard_text or "No data", inline=False)
+            embed.add_field(name="Prize", value="Top 3 get legendary status! 🏅", inline=False)
+            embed.set_footer(text="All-time stats (since tracking began)")
+            embed.timestamp = discord.utils.utcnow()
+            await ctx.send(embed=embed)
+            return
+        # ... existing code for daily leaderboard ...
         if guild_id not in voice_activity_today or not voice_activity_today[guild_id]:
             await ctx.send("No voice activity recorded today!")
             return
-
         now = discord.utils.utcnow()
         up_to_date_activity = {}
         for user_id, data in voice_activity_today[guild_id].items():
@@ -1376,16 +1429,11 @@ async def voice_activity(ctx):
                 "name": data.get("name", f"User {user_id}"),
                 "total_time": total_time
             }
-
-        sorted_activity = sorted(up_to_date_activity.items(),
-                                 key=lambda x: x[1]["total_time"],
-                                 reverse=True)[:10]
-
+        sorted_activity = sorted(up_to_date_activity.items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
         embed = discord.Embed(
             title="🎙️ Today's Voice Activity Leaders (Real-Time)",
             description="Most active users in voice channels today (real-time)",
             color=0x00ff88)
-
         leaderboard_text = ""
         titles = [
             "Pioneer", "Trailblazer", "Innovator", "Champion", "Elite", "Vanguard",
@@ -1398,16 +1446,10 @@ async def voice_activity(ctx):
             title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
             leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
-
-        embed.add_field(name="🏆 Leaderboard",
-                        value=leaderboard_text or "No data",
-                        inline=False)
-        embed.add_field(name="Prize",
-                        value="Top 3 get bragging rights! 🎉",
-                        inline=False)
+        embed.add_field(name="🏆 Leaderboard", value=leaderboard_text or "No data", inline=False)
+        embed.add_field(name="Prize", value="Top 3 get bragging rights! 🎉", inline=False)
         embed.set_footer(text="Resets daily at midnight UTC")
         embed.timestamp = discord.utils.utcnow()
-
         await ctx.send(embed=embed)
     except Exception as e:
         import traceback
@@ -3152,17 +3194,17 @@ def save_all_data() -> None:
         # Save channel_stats
         db.channel_stats.delete_many({})
         if channel_stats:
-            db.channel_stats.insert_one({"data": channel_stats})
+            db.channel_stats.insert_one({"data": stringify_keys(channel_stats)})
         
         # Save created_channels
         db.created_channels.delete_many({})
         if created_channels:
-            db.created_channels.insert_one({"ids": list(created_channels.keys())})
+            db.created_channels.insert_one({"ids": [str(k) for k in created_channels.keys()]})
         
         # Save everyone_warnings
         db.everyone_warnings.delete_many({})
         if everyone_warnings:
-            db.everyone_warnings.insert_one({"data": everyone_warnings})
+            db.everyone_warnings.insert_one({"data": stringify_keys(everyone_warnings)})
         
         # Save mention_spam_tracker
         tracker_data = [{"key": str(k), "timestamps": list(v)} for k, v in mention_spam_tracker.items()]
@@ -3173,27 +3215,27 @@ def save_all_data() -> None:
         # Save mention_spam_warnings
         db.mention_spam_warnings.delete_many({})
         if mention_spam_warnings:
-            db.mention_spam_warnings.insert_one({"data": mention_spam_warnings})
+            db.mention_spam_warnings.insert_one({"data": stringify_keys(mention_spam_warnings)})
         
         # Save WARNINGS_DB
         db.warnings_db.delete_many({})
         if WARNINGS_DB:
-            db.warnings_db.insert_one({"data": WARNINGS_DB})
+            db.warnings_db.insert_one({"data": stringify_keys(WARNINGS_DB)})
         
         # Save server_stats
         db.server_stats.delete_many({})
         if server_stats:
-            db.server_stats.insert_one({"data": server_stats})
+            db.server_stats.insert_one({"data": stringify_keys(server_stats)})
         
         # Save user_activity
         db.user_activity.delete_many({})
         if user_activity:
-            db.user_activity.insert_one({"data": user_activity})
+            db.user_activity.insert_one({"data": stringify_keys(user_activity)})
         
         # Save message_cooldowns
         db.message_cooldowns.delete_many({})
         if message_cooldowns:
-            db.message_cooldowns.insert_one({"data": message_cooldowns})
+            db.message_cooldowns.insert_one({"data": stringify_keys(message_cooldowns)})
         
         # Save active_character_per_channel
         db.active_characters.delete_many({})
@@ -3208,6 +3250,11 @@ def save_all_data() -> None:
             dm_data = [{"user_id": str(k), "data": v} for k, v in active_dm_conversations.items()]
             if dm_data:
                 db.active_dm_conversations.insert_many(dm_data)
+        
+        # Save voice_activity_alltime
+        db.voice_activity_alltime.delete_many({})
+        if voice_activity_alltime:
+            db.voice_activity_alltime.insert_one({"data": stringify_keys(voice_activity_alltime)})
         
         logger.info("All data saved successfully")
     except Exception as e:
@@ -3296,6 +3343,12 @@ def load_all_data() -> None:
         for doc in db.active_dm_conversations.find():
             active_dm_conversations[int(doc["user_id"])] = doc["data"]
         
+        # Load voice_activity_alltime
+        voice_activity_alltime.clear()
+        doc = db.voice_activity_alltime.find_one()
+        if doc:
+            voice_activity_alltime.update(doc["data"])
+        
         logger.info("All data loaded successfully")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
@@ -3371,29 +3424,35 @@ async def set_ai_channel(ctx, channel: discord.TextChannel):
 
 @bot.command(name="settimezone")
 @commands.has_permissions(administrator=True)
-async def set_timezone(ctx, *, country_or_tz: str):
+async def set_timezone(ctx, *, country_or_tz: str = None):
+    if not country_or_tz or not isinstance(country_or_tz, str):
+        await ctx.send("\u274c Please provide a valid country or timezone name.")
+        return
     # Try as a timezone first
     try:
         pytz.timezone(country_or_tz)
         set_guild_setting(ctx.guild.id, "timezone", country_or_tz)
-        await ctx.send(f"✅ Timezone set to `{country_or_tz}` for this server.")
+        await ctx.send(f"\u2705 Timezone set to `{country_or_tz}` for this server.")
         return
     except pytz.UnknownTimeZoneError:
         pass
     # Try as a country
+    if CountryInfo is None:
+        await ctx.send("\u274c Country-to-timezone feature is not available because the 'countryinfo' package is not installed.")
+        return
     try:
         country = CountryInfo(country_or_tz)
         country_code = country.iso()['alpha2']
         timezones = pytz.country_timezones.get(country_code)
         if not timezones:
-            await ctx.send("❌ No timezone found for that country.")
+            await ctx.send("\u274c No timezone found for that country.")
             return
         # If multiple, pick the first (or prompt user for more advanced logic)
         tz = timezones[0]
         set_guild_setting(ctx.guild.id, "timezone", tz)
-        await ctx.send(f"✅ Timezone for `{country_or_tz}` set to `{tz}` for this server.")
+        await ctx.send(f"\u2705 Timezone for `{country_or_tz}` set to `{tz}` for this server.")
     except Exception:
-        await ctx.send("❌ Unknown country or timezone! Example: `Nepal`, `India`, `USA`, `Asia/Kathmandu`.")
+        await ctx.send("\u274c Unknown country or timezone! Example: `Nepal`, `India`, `USA`, `Asia/Kathmandu`.")
 
 @bot.command(name="servertime")
 async def server_time(ctx):
@@ -3422,6 +3481,8 @@ else:
         logger.error(f"❌ Bot startup error: {e}")
 
 def get_template_channels(guild_id):
+    if not guild_id or not isinstance(guild_id, (int, str)):
+        return {}
     settings = get_guild_settings(guild_id)
     return {
         "Duo": {"id": settings.get("duo_channel_id"), "limit": 2},
@@ -3429,3 +3490,131 @@ def get_template_channels(guild_id):
         "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
         "Team": {"id": settings.get("team_channel_id"), "limit": 12},
     }
+
+# --- Music System ---
+music_queues = {}  # {guild_id: [track_dict, ...]}
+now_playing = {}   # {guild_id: track_dict}
+
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
+
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        ytdl_format_options = {
+            'format': 'bestaudio/best',
+            'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+            'restrictfilenames': True,
+            'noplaylist': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'auto',
+            'source_address': '0.0.0.0',
+        }
+        ffmpeg_options = {
+            'options': '-vn'
+        }
+        ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        if 'entries' in data:
+            data = data['entries'][0]
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+async def ensure_voice(ctx):
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.send("❌ You are not in a voice channel!")
+        return None
+    channel = ctx.author.voice.channel
+    if ctx.voice_client is None:
+        await channel.connect()
+    elif ctx.voice_client.channel != channel:
+        await ctx.voice_client.move_to(channel)
+    return ctx.voice_client
+
+@bot.command(name="join")
+async def join(ctx):
+    """Join your voice channel."""
+    vc = await ensure_voice(ctx)
+    if vc:
+        await ctx.send(f"✅ Joined {vc.channel.mention}")
+
+@bot.command(name="leave")
+async def leave(ctx):
+    """Leave the voice channel."""
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("👋 Left the voice channel.")
+    else:
+        await ctx.send("❌ I'm not in a voice channel!")
+
+async def play_next(ctx):
+    guild_id = ctx.guild.id
+    queue = music_queues.get(guild_id, [])
+    if not queue:
+        now_playing.pop(guild_id, None)
+        await ctx.voice_client.disconnect()
+        return
+    track = queue.pop(0)
+    now_playing[guild_id] = track
+    source = await YTDLSource.from_url(track['url'], loop=bot.loop, stream=True)
+    ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
+    await ctx.send(f"🎶 Now playing: **{source.title}**")
+
+@bot.command(name="play")
+async def play(ctx, *, url: str):
+    """Play a song from YouTube or Spotify (url or search)."""
+    vc = await ensure_voice(ctx)
+    if not vc:
+        return
+    guild_id = ctx.guild.id
+    if guild_id not in music_queues:
+        music_queues[guild_id] = []
+    # --- Spotify support ---
+    if sp and ("open.spotify.com" in url or url.strip().startswith("spotify:")):
+        try:
+            await ctx.send("🔎 Fetching Spotify tracks...")
+            if "/track/" in url:
+                track = sp.track(url)
+                query = f"{track['name']} {track['artists'][0]['name']} audio"
+                music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                await ctx.send(f"🎵 Added **{track['name']}** by **{track['artists'][0]['name']}** to queue!")
+            elif "/playlist/" in url:
+                playlist = sp.playlist_tracks(url)
+                for item in playlist['items']:
+                    track = item['track']
+                    query = f"{track['name']} {track['artists'][0]['name']} audio"
+                    music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                await ctx.send(f"🎵 Added {len(playlist['items'])} tracks from Spotify playlist to queue!")
+            elif "/album/" in url:
+                album = sp.album_tracks(url)
+                for track in album['items']:
+                    query = f"{track['name']} {track['artists'][0]['name']} audio"
+                    music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                await ctx.send(f"🎵 Added {len(album['items'])} tracks from Spotify album to queue!")
+            else:
+                await ctx.send("❌ Unsupported Spotify link.")
+                return
+            # If nothing is playing, start
+            if not vc.is_playing():
+                await play_next(ctx)
+            return
+        except Exception as e:
+            await ctx.send(f"❌ Spotify error: {e}")
+            return
+    # --- End Spotify support ---
+    # Add to queue (YouTube or search)
+    music_queues[guild_id].append({'url': url, 'requester': ctx.author.display_name})
+    await ctx.send(f"🔎 Searching for: {url}")
+    # If nothing is playing, start
+    if not vc.is_playing():
+        await play_next(ctx)
+    else:
+        await ctx.send(f"�� Added to queue!")
