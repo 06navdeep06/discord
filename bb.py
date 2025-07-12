@@ -38,6 +38,15 @@ except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
 
+# Spotify client initialization
+if spotipy and SpotifyClientCredentials:
+    sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
+        client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+        client_secret=os.getenv("SPOTIFY_CLIENT_SECRET")
+    ))
+else:
+    sp = None
+
 # --- Per-Guild Settings Helper Functions ---
 
 def get_guild_settings(guild_id):
