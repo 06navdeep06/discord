@@ -48,6 +48,8 @@ except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
 from datetime import timezone  # For UTC timezone
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Spotify client initialization ---
 # If Spotify credentials are set, initialize the Spotify API client
