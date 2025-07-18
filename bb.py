@@ -2,6 +2,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
+
 # Discord Bot: Multi-Feature Server Manager
 # -----------------------------------------
 # This bot manages voice channels, moderation,
@@ -3684,6 +3686,17 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = data['entries'][0]
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+def get_weekday_index():
+    return datetime.datetime.now().weekday()
+
+def update_weekly_voice_time(guild_id, user_id, seconds):
+    if guild_id not in voice_activity_weekly:
+        voice_activity_weekly[guild_id] = {}
+    if user_id not in voice_activity_weekly[guild_id]:
+        voice_activity_weekly[guild_id][user_id] = [0] * 7
+    idx = get_weekday_index()
+    voice_activity_weekly[guild_id][user_id][idx] += seconds
 
 async def ensure_voice(ctx):
     if ctx.author.voice is None or ctx.author.voice.channel is None:
