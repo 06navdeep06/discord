@@ -110,13 +110,6 @@ def update_weekly_chat_activity(guild_id, user_id):
         chat_activity_weekly[guild_id][user_id] = [0] * 7
     idx = datetime.datetime.utcnow().weekday()
     chat_activity_weekly[guild_id][user_id][idx] += 1
-    try:
-        tz = pytz.timezone(tzname)
-    except pytz.UnknownTimeZoneError:
-        tz = pytz.utc
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=pytz.utc)
-    return dt.astimezone(tz)
 
 # --- Conversation Start Time Tracking ---
 # Used for tracking how long a conversation has been going in a server
