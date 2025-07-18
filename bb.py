@@ -98,6 +98,10 @@ def get_guild_timezone(guild_id):
 def localize_time(dt, guild_id):
     """Convert a datetime object to the guild's local timezone."""
     tzname = get_guild_timezone(guild_id)
+    tz = pytz.timezone(tzname)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=pytz.utc)
+    return dt.astimezone(tz)
 
 def update_weekly_chat_activity(guild_id, user_id):
     if guild_id not in chat_activity_weekly:
@@ -908,7 +912,7 @@ async def on_command_error(ctx, error):
     else:
         logger.error(f"Unhandled command error: {error}")
         logger.error(f"Command error traceback: {traceback.format_exc()}")
-        await ctx.send("❌ An unexpected error occurred while processing your command.")
+        # await ctx.send("❌ An unexpected error occurred while processing your command.")
 
 
 @bot.event
