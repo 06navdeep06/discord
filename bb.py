@@ -2501,6 +2501,28 @@ async def role_info(ctx, role: discord.Role):
         description=role.mention,
         color=role.color if role.color != discord.Color.default() else 0x00ff00
     )
+
+@bot.command(name="chatactivity", aliases=["chatleaderboard"])
+async def chat_activity_leaderboard(ctx):
+    """Show the weekly chat activity leaderboard."""
+    guild_id = ctx.guild.id
+    if guild_id not in chat_activity_weekly or not chat_activity_weekly[guild_id]:
+        await ctx.send("No chat activity recorded this week!")
+        return
+    user_totals = {user_id: sum(days) for user_id, days in chat_activity_weekly[guild_id].items()}
+    top_users = sorted(user_totals.items(), key=lambda x: x[1], reverse=True)[:10]
+    leaderboard = ""
+    for i, (user_id, total) in enumerate(top_users, 1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"User {user_id}"
+        leaderboard += f"{i}. **{name}** - {total} messages\n"
+    embed = discord.Embed(
+        title="💬 Weekly Chat Activity Leaderboard",
+        description=leaderboard or "No data.",
+        color=0x3498db
+    )
+    await ctx.send(embed=embed)
+    )
     
     # Basic info
     embed.add_field(
