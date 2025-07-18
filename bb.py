@@ -3651,6 +3651,7 @@ music_queues = {}  # {guild_id: [track_dict, ...]}
 now_playing = {}   # {guild_id: track_dict}
 
 
+class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
