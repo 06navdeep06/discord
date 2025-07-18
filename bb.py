@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
+chat_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
 
 # Discord Bot: Multi-Feature Server Manager
 # -----------------------------------------
