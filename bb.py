@@ -98,6 +98,14 @@ def get_guild_timezone(guild_id):
 def localize_time(dt, guild_id):
     """Convert a datetime object to the guild's local timezone."""
     tzname = get_guild_timezone(guild_id)
+
+def update_weekly_chat_activity(guild_id, user_id):
+    if guild_id not in chat_activity_weekly:
+        chat_activity_weekly[guild_id] = {}
+    if user_id not in chat_activity_weekly[guild_id]:
+        chat_activity_weekly[guild_id][user_id] = [0] * 7
+    idx = datetime.datetime.utcnow().weekday()
+    chat_activity_weekly[guild_id][user_id][idx] += 1
     try:
         tz = pytz.timezone(tzname)
     except pytz.UnknownTimeZoneError:
