@@ -2522,7 +2522,6 @@ async def chat_activity_leaderboard(ctx):
         color=0x3498db
     )
     await ctx.send(embed=embed)
-    )
     
     # Basic info
     embed.add_field(
