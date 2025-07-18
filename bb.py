@@ -915,10 +915,10 @@ async def on_voice_state_update(member, before, after):
 
         # User joined a voice channel
         if after.channel and not before.channel:
-            # Only set join_time if not self-deafened and not in AFK channel
+            # Only set join_time if not self-deafened, not self-muted, and not in AFK channel
             settings = get_guild_settings(member.guild.id)
             afk_channel_id = settings.get("afk_channel_id")
-            if not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+            if not after.self_deaf and not after.self_mute and (not afk_channel_id or after.channel.id != afk_channel_id):
                 voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
             else:
                 voice_activity_today[guild_id][user_id]["join_time"] = None
@@ -929,8 +929,8 @@ async def on_voice_state_update(member, before, after):
             now = discord.utils.utcnow()
             settings = get_guild_settings(member.guild.id)
             afk_channel_id = settings.get("afk_channel_id")
-            # Only count time if not self-deafened and not in AFK channel
-            if join_time is not None and not before.self_deaf and (not afk_channel_id or before.channel.id != afk_channel_id):
+            # Only count time if not self-deafened, not self-muted, and not in AFK channel
+            if join_time is not None and not before.self_deaf and not before.self_mute and (not afk_channel_id or before.channel.id != afk_channel_id):
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
                         now = now.replace(tzinfo=timezone.utc)
@@ -943,8 +943,8 @@ async def on_voice_state_update(member, before, after):
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
                 update_weekly_voice_time(guild_id, user_id, time_spent)
-            # Reset join_time if still in a channel and not self-deafened/AFK
-            if after.channel and not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+            # Reset join_time if still in a channel and not self-deafened, not self-muted, and not in AFK channel
+            if after.channel and not after.self_deaf and not after.self_mute and (not afk_channel_id or after.channel.id != afk_channel_id):
                 voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
             else:
                 voice_activity_today[guild_id][user_id]["join_time"] = None
@@ -955,8 +955,8 @@ async def on_voice_state_update(member, before, after):
             now = discord.utils.utcnow()
             settings = get_guild_settings(member.guild.id)
             afk_channel_id = settings.get("afk_channel_id")
-            # Only count time if not self-deafened and not in AFK channel
-            if join_time is not None and not before.self_deaf and (not afk_channel_id or before.channel.id != afk_channel_id):
+            # Only count time if not self-deafened, not self-muted, and not in AFK channel
+            if join_time is not None and not before.self_deaf and not before.self_mute and (not afk_channel_id or before.channel.id != afk_channel_id):
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
                         now = now.replace(tzinfo=timezone.utc)
@@ -969,8 +969,8 @@ async def on_voice_state_update(member, before, after):
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
                 update_weekly_voice_time(guild_id, user_id, time_spent)
-            # Reset join_time if still in a channel and not self-deafened/AFK
-            if after.channel and not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+            # Reset join_time if still in a channel and not self-deafened, not self-muted, and not in AFK channel
+            if after.channel and not after.self_deaf and not after.self_mute and (not afk_channel_id or after.channel.id != afk_channel_id):
                 voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
             else:
                 voice_activity_today[guild_id][user_id]["join_time"] = None
@@ -3766,209 +3766,3 @@ async def play(ctx, *, url: str):
         await play_next(ctx)
     else:
         await ctx.send(f"�� Added to queue!")
-
-# Load data on startup
-load_all_data()
-
-# Validate token before running
-token = os.getenv("TOKEN")
-if not token:
-    logger.error("❌ No TOKEN environment variable found!")
-    logger.error("Please set your Discord bot token in the Secrets tab.")
-else:
-    try:
-        bot.run(token)
-    except discord.LoginFailure:
-        logger.error("❌ Invalid Discord token!")
-    except Exception as e:
-        logger.error(f"❌ Bot startup error: {e}")
-
-def get_template_channels(guild_id):
-    if not guild_id or not isinstance(guild_id, (int, str)):
-        return {}
-    settings = get_guild_settings(guild_id)
-    return {
-        "Duo": {"id": settings.get("duo_channel_id"), "limit": 2},
-        "Trio": {"id": settings.get("trio_channel_id"), "limit": 3},
-        "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
-        "Team": {"id": settings.get("team_channel_id"), "limit": 12},
-    }
-
-from datetime import datetime
-
-def get_weekday_index():
-    # Returns 0 for Monday, 6 for Sunday (UTC)
-    return dt.datetime.utcnow().weekday()
-
-def update_weekly_voice_time(guild_id, user_id, seconds):
-    if guild_id not in voice_activity_weekly:
-        voice_activity_weekly[guild_id] = {}
-    if user_id not in voice_activity_weekly[guild_id]:
-        voice_activity_weekly[guild_id][user_id] = [0] * 7
-    idx = get_weekday_index()
-    voice_activity_weekly[guild_id][user_id][idx] += seconds
-
-# --- Weekly window rolling and role assignment ---
-def roll_weekly_voice_time():
-    for guild_id in voice_activity_weekly:
-        for user_id in voice_activity_weekly[guild_id]:
-            voice_activity_weekly[guild_id][user_id] = (
-                voice_activity_weekly[guild_id][user_id][1:] + [0]
-            )
-
-def get_top_weekly_user(guild_id):
-    if guild_id not in voice_activity_weekly:
-        return None, 0
-    user_times = voice_activity_weekly[guild_id]
-    if not user_times:
-        return None, 0
-    top_user_id, top_time = max(user_times.items(), key=lambda x: sum(x[1]))
-    return top_user_id, sum(user_times[top_user_id])
-
-async def assign_most_active_user_roles():
-    for guild in bot.guilds:
-        guild_id = guild.id
-        if guild_id not in voice_activity_weekly:
-            continue
-        user_times = voice_activity_weekly[guild_id]
-        if not user_times:
-            continue
-        top_user_id, top_time = get_top_weekly_user(guild_id)
-        if not top_user_id or top_time == 0:
-            continue
-        role_name = "Most Active User"
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role:
-            try:
-                role = await guild.create_role(name=role_name, color=discord.Color.gold(), reason="Weekly voice activity award")
-            except Exception as e:
-                logger.error(f"Failed to create role in {guild.name}: {e}")
-                continue
-        # Remove role from all members
-        for member in guild.members:
-            if role in member.roles:
-                try:
-                    await member.remove_roles(role, reason="Weekly voice activity reset")
-                except Exception as e:
-                    logger.error(f"Failed to remove role: {e}")
-        # Assign to top user
-        member = guild.get_member(int(top_user_id))
-        if member:
-            try:
-                await member.add_roles(role, reason="Most active in voice this week")
-                # Announce in system channel or first text channel
-                channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
-                if channel:
-                    await channel.send(f"🏆 {member.mention} is this week's **Most Active User** in voice channels!")
-            except Exception as e:
-                logger.error(f"Failed to assign role: {e}")
-
-# --- Weekly reset task ---
-async def reset_voice_activity_weekly():
-    while True:
-        now = discord.utils.utcnow()
-        next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        await discord.utils.sleep_until(next_midnight)
-        # Only roll and assign on Monday (UTC)
-        if now.weekday() == 0:
-            roll_weekly_voice_time()
-            await assign_most_active_user_roles()
-            save_all_data()
-
-voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
-
-# Add after other globals
-chat_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
-chat_message_timestamps = {}  # {guild_id: {user_id: [timestamps]}}
-
-# Helper for chat activity
-def update_weekly_chat_activity(guild_id, user_id):
-    if guild_id not in chat_activity_weekly:
-        chat_activity_weekly[guild_id] = {}
-    if user_id not in chat_activity_weekly[guild_id]:
-        chat_activity_weekly[guild_id][user_id] = [0] * 7
-    idx = get_weekday_index()
-    chat_activity_weekly[guild_id][user_id][idx] += 1
-
-def roll_weekly_chat_activity():
-    for guild_id in chat_activity_weekly:
-        for user_id in chat_activity_weekly[guild_id]:
-            chat_activity_weekly[guild_id][user_id] = (
-                chat_activity_weekly[guild_id][user_id][1:] + [0]
-            )
-
-async def assign_most_active_chatter_roles():
-    for guild in bot.guilds:
-        guild_id = guild.id
-        if guild_id not in chat_activity_weekly:
-            continue
-        user_counts = chat_activity_weekly[guild_id]
-        if not user_counts:
-            continue
-        top_user_id, top_count = max(user_counts.items(), key=lambda x: sum(x[1]))
-        if not top_user_id or top_count == 0:
-            continue
-        role_name = "Most Active Chatter"
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role:
-            try:
-                role = await guild.create_role(name=role_name, color=discord.Color.blue(), reason="Weekly chat activity award")
-            except Exception as e:
-                logger.error(f"Failed to create chat role in {guild.name}: {e}")
-                continue
-        # Remove role from all members
-        for member in guild.members:
-            if role in member.roles:
-                try:
-                    await member.remove_roles(role, reason="Weekly chat activity reset")
-                except Exception as e:
-                    logger.error(f"Failed to remove chat role: {e}")
-        # Assign to top user
-        member = guild.get_member(int(top_user_id))
-        if member:
-            try:
-                await member.add_roles(role, reason="Most active in chat this week")
-                channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
-                if channel:
-                    await channel.send(f"💬 {member.mention} is this week's **Most Active Chatter**!")
-            except Exception as e:
-                logger.error(f"Failed to assign chat role: {e}")
-
-# --- In on_message, after confirming not a bot and in a guild ---
-    if not message.author.bot and message.guild:
-        settings = get_guild_settings(message.guild.id)
-        ai_channel_id = settings.get("ai_channel_id")
-        # Exclude messages in AI/Miku channel
-        if not (ai_channel_id and message.channel.id == ai_channel_id):
-            # Spam prevention: only count if user hasn't sent >5 messages in last 10s
-            guild_id = message.guild.id
-            user_id = str(message.author.id)
-            now = datetime.utcnow().timestamp()
-            if guild_id not in chat_message_timestamps:
-                chat_message_timestamps[guild_id] = {}
-            if user_id not in chat_message_timestamps[guild_id]:
-                chat_message_timestamps[guild_id][user_id] = []
-            timestamps = chat_message_timestamps[guild_id][user_id]
-            # Remove old timestamps
-            chat_message_timestamps[guild_id][user_id] = [t for t in timestamps if now - t < 10]
-            if len(chat_message_timestamps[guild_id][user_id]) < 5:
-                update_weekly_chat_activity(guild_id, user_id)
-                chat_message_timestamps[guild_id][user_id].append(now)
-
-# --- In weekly reset task, after rolling voice activity and assigning voice role ---
-    roll_weekly_chat_activity()
-    await assign_most_active_chatter_roles()
-
-# --- Persistence: Add to save_all_data and load_all_data ---
-# In save_all_data:
-        # Save chat_activity_weekly
-        db.chat_activity_weekly.delete_many({})
-        if chat_activity_weekly:
-            db.chat_activity_weekly.insert_one({"data": stringify_keys(chat_activity_weekly)})
-# In load_all_data:
-        # Load chat_activity_weekly
-        chat_activity_weekly.clear()
-        doc = db.chat_activity_weekly.find_one()
-        if doc:
-            chat_activity_weekly.update(doc["data"])
-
