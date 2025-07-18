@@ -1,44 +1,56 @@
-import discord
-from discord.ext import commands
-import asyncio
-import os
-import logging
-from datetime import timedelta
-import random
-import re
-from collections import defaultdict, deque
-import time
-import requests  # Add this import for Wikipedia API
-from urllib.parse import quote  # Correct import for quote
-import json  # For Google AI API
+# =========================================
+# Discord Bot: Multi-Feature Server Manager
+# -----------------------------------------
+# This bot manages voice channels, moderation,
+# AI chat, fun commands, and more for Discord servers.
+# It uses MongoDB for data persistence and supports
+# per-guild (server) settings.
+# =========================================
+
+# --- Imports ---
+import discord  # Discord API wrapper
+from discord.ext import commands  # For command-based bots
+import asyncio  # For asynchronous programming (needed for Discord bots)
+import os  # For environment variables (API keys, tokens)
+import logging  # For logging errors and info
+from datetime import timedelta  # For time calculations
+import random  # For random choices (e.g., GIFs, responses)
+import re  # For regular expressions (pattern matching)
+from collections import defaultdict, deque  # For advanced data structures
+import time  # For timestamps and timing
+import requests  # For making HTTP requests (e.g., Wikipedia API)
+from urllib.parse import quote  # For URL encoding
+import json  # For working with JSON data (e.g., Google AI API)
 try:
-    from pymongo import MongoClient
+    from pymongo import MongoClient  # For MongoDB database connection
 except ImportError:
     MongoClient = None
     print("Warning: pymongo not installed. Database features will be disabled.")
-from typing import Optional
-import aiohttp
-import datetime
-import math
-import platform
-import psutil
-import traceback
-from io import BytesIO
+from typing import Optional  # For type hints
+import aiohttp  # For asynchronous HTTP requests
+import datetime as dt  # For date and time operations
+import math  # For math operations
+import platform  # For system info
+import psutil  # For system resource usage
+import traceback  # For error tracebacks
+from io import BytesIO  # For in-memory file operations
 import pytz  # For timezone support
 try:
-    from countryinfo import CountryInfo  # For country to timezone mapping
+    from countryinfo import CountryInfo  # For mapping country to timezone
 except ImportError:
     CountryInfo = None
     print("Warning: countryinfo not installed. Country to timezone features will be disabled.")
-import yt_dlp
+import yt_dlp  # For downloading/streaming YouTube audio
 try:
-    import spotipy
+    import spotipy  # For Spotify API
     from spotipy.oauth2 import SpotifyClientCredentials
 except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
+from datetime import timezone  # For UTC timezone
 
-# Spotify client initialization
+# --- Spotify client initialization ---
+# If Spotify credentials are set, initialize the Spotify API client
 if spotipy and SpotifyClientCredentials:
     sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
         client_id=os.getenv("SPOTIFY_CLIENT_ID"),
@@ -47,15 +59,16 @@ if spotipy and SpotifyClientCredentials:
 else:
     sp = None
 
-# --- Per-Guild Settings Helper Functions ---
-
+# --- Per-Guild (Server) Settings Helper Functions ---
 def get_guild_settings(guild_id):
+    """Fetch settings for a specific Discord server (guild) from the database."""
     if db is None:
         return {}
     settings = db.guild_settings.find_one({"guild_id": guild_id})
     return settings or {}
 
 def set_guild_setting(guild_id, key, value):
+    """Set a specific setting for a Discord server (guild) in the database."""
     if db is None:
         return
     db.guild_settings.update_one(
@@ -65,10 +78,12 @@ def set_guild_setting(guild_id, key, value):
     )
 
 def get_guild_timezone(guild_id):
+    """Get the timezone for a guild, defaulting to UTC if not set."""
     settings = get_guild_settings(guild_id)
     return settings.get("timezone", "UTC")  # Default to UTC
 
 def localize_time(dt, guild_id):
+    """Convert a datetime object to the guild's local timezone."""
     tzname = get_guild_timezone(guild_id)
     try:
         tz = pytz.timezone(tzname)
@@ -78,19 +93,23 @@ def localize_time(dt, guild_id):
         dt = dt.replace(tzinfo=pytz.utc)
     return dt.astimezone(tz)
 
-# Helper to get or set conversation start time per guild
+# --- Conversation Start Time Tracking ---
+# Used for tracking how long a conversation has been going in a server
 conversation_start_times = {}
 
 def get_conversation_start(guild_id):
+    """Get the start time of the current conversation for a guild."""
     if guild_id not in conversation_start_times:
         conversation_start_times[guild_id] = discord.utils.utcnow().replace(tzinfo=pytz.utc)
     return conversation_start_times[guild_id]
 
 def get_conversation_duration(guild_id):
+    """Get the duration of the current conversation for a guild."""
     start = get_conversation_start(guild_id)
     now = discord.utils.utcnow().replace(tzinfo=pytz.utc)
     return now - start
 
+# --- Welcome GIFs ---
 WELCOME_GIFS = [
     "https://media.tenor.com/2roX3uxz_68AAAAC/welcome.gif",
     "https://media.giphy.com/media/OkJat1YNdoD3W/giphy.gif",
@@ -104,7 +123,11 @@ WELCOME_GIFS = [
 
 # --- Response Post-processing ---
 def postprocess_response(text, recent_endings: Optional[list] = None):
-    """Trim or rephrase if the response ends with a question or repetitive phrase."""
+    """
+    Clean up AI-generated responses:
+    - Remove repetitive endings or questions.
+    - Avoid always ending with a question.
+    """
     if not text:
         return text
     repetitive_endings = [
@@ -170,8 +193,12 @@ def postprocess_response(text, recent_endings: Optional[list] = None):
                 break
     return text
 
-# Helper to fetch and format recent channel history for LLM context
+# --- Channel History Helper ---
 async def get_recent_channel_history(channel: discord.TextChannel, bot_user: discord.User, current_message: discord.Message, limit: int = 20) -> list:
+    """
+    Fetch the last N messages from a channel (excluding commands and bot messages),
+    for use as context in AI responses.
+    """
     history = []
     try:
         async for msg in channel.history(limit=limit, oldest_first=True):
@@ -196,17 +223,20 @@ async def get_recent_channel_history(channel: discord.TextChannel, bot_user: dis
         history.append((current_message.author.display_name, content))
     return history
 
-# Set up logging for debugging
+# --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Discord Bot Intents ---
+# Intents control which events the bot receives from Discord
 intents = discord.Intents.default()
-intents.voice_states = True
-intents.guilds = True
-intents.members = True
-intents.message_content = True
+intents.voice_states = True  # Needed for voice channel events
+intents.guilds = True  # Needed for server events
+intents.members = True  # Needed for member join/leave events
+intents.message_content = True  # Needed to read message content
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# --- Bot Initialization ---
+bot = commands.Bot(command_prefix="!", intents=intents)  # '!' is the command prefix
 
 TEMPLATE_CHANNELS = {
     "Duo": {
@@ -679,6 +709,7 @@ async def on_ready():
     bot.loop.create_task(heartbeat())
     bot.loop.create_task(reset_voice_activity())
     bot.loop.create_task(reset_daily_stats())
+    bot.loop.create_task(reset_voice_activity_weekly())
 
 
 @bot.event
@@ -891,7 +922,7 @@ async def on_voice_state_update(member, before, after):
             if join_time is not None:
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-                        now = now.replace(tzinfo=datetime.timezone.utc)
+                        now = now.replace(tzinfo=timezone.utc)
                 else:
                     if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
                         now = now.replace(tzinfo=None)
@@ -900,6 +931,7 @@ async def on_voice_state_update(member, before, after):
                 # --- Alltime update ---
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
+                update_weekly_voice_time(guild_id, user_id, time_spent)
                 voice_activity_today[guild_id][user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
 
         # User switched channels (reset join time if still in voice)
@@ -909,7 +941,7 @@ async def on_voice_state_update(member, before, after):
             if join_time is not None:
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-                        now = now.replace(tzinfo=datetime.timezone.utc)
+                        now = now.replace(tzinfo=timezone.utc)
                 else:
                     if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
                         now = now.replace(tzinfo=None)
@@ -918,6 +950,7 @@ async def on_voice_state_update(member, before, after):
                 # --- Alltime update ---
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
+                update_weekly_voice_time(guild_id, user_id, time_spent)
             voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
 
         # Use per-guild AFK channel
@@ -1343,8 +1376,8 @@ async def handle_dm_reply(message: discord.Message):
         forward_embed.add_field(name="Sent At", value=discord.utils.format_dt(message.created_at, style='T'), inline=True)
         
         # Add conversation duration
-        start_time = datetime.datetime.fromtimestamp(conversation["start_time"])
-        duration = discord.utils.utcnow() - start_time.replace(tzinfo=datetime.timezone.utc)
+        start_time = dt.datetime.fromtimestamp(conversation["start_time"])
+        duration = discord.utils.utcnow() - start_time.replace(tzinfo=timezone.utc)
         forward_embed.add_field(name="Conversation Duration", value=str(duration).split('.')[0], inline=True)
         
         # Add quick reply buttons (text-based for now)
@@ -1452,7 +1485,7 @@ async def cleanup(ctx):
 
 
 @bot.command(name="voiceactivity", aliases=["va"])
-async def voice_activity(ctx, mode: str = None):
+async def voice_activity(ctx, mode: Optional[str] = None):
     """Show today's or all-time voice channel activity leaderboard with real-time accuracy
     Usage: !voiceactivity [alltime]
     """
@@ -2000,7 +2033,7 @@ async def check_user_warnings(ctx, member: Optional[discord.Member] = None):
         for i, warning in enumerate(WARNINGS_DB[user_id], 1):
             moderator = bot.get_user(warning["moderator"])
             mod_name = moderator.display_name if moderator else "Unknown"
-            timestamp = datetime.datetime.fromtimestamp(warning["timestamp"])
+            timestamp = dt.datetime.fromtimestamp(warning["timestamp"])
             embed.add_field(
                 name=f"Warning #{i}",
                 value=f"**Reason:** {warning['reason']}\n**By:** {mod_name}\n**Date:** {timestamp.strftime('%Y-%m-%d %H:%M')}",
@@ -2239,7 +2272,7 @@ async def user_info(ctx, member: discord.Member = None):
 async def bot_info(ctx):
     """Display bot information and statistics, including a categorized command list"""
     # Calculate uptime
-    uptime = discord.utils.utcnow() - bot.start_time if hasattr(bot, 'start_time') else datetime.timedelta(0)
+    uptime = discord.utils.utcnow() - bot.start_time if hasattr(bot, 'start_time') else dt.timedelta(0)
     uptime_str = str(uptime).split('.')[0]  # Remove microseconds
     
     # System info
@@ -3130,8 +3163,8 @@ async def dm_status(ctx):
             moderator = bot.get_user(data["moderator_id"])
             mod_name = moderator.display_name if moderator else f"Staff {data['moderator_id']}"
             
-            start_time = datetime.datetime.fromtimestamp(data["start_time"])
-            duration = discord.utils.utcnow() - start_time.replace(tzinfo=datetime.timezone.utc)
+            start_time = dt.datetime.fromtimestamp(data["start_time"])
+            duration = discord.utils.utcnow() - start_time.replace(tzinfo=timezone.utc)
             
             embed.add_field(
                 name=f"👤 {user_name}",
@@ -3227,7 +3260,7 @@ async def dm_help(ctx):
 
 # MongoDB Atlas connection
 MONGO_URI = os.getenv("MONGO_URI")
-if MONGO_URI:
+if MONGO_URI and MongoClient is not None:
     try:
         client = MongoClient(MONGO_URI)
         db = client["discord_bot"]
@@ -3238,7 +3271,7 @@ if MONGO_URI:
         logger.error(f"❌ MongoDB connection failed: {e}")
         db = None
 else:
-    logger.warning("⚠️ No MONGO_URI found, data persistence disabled")
+    logger.warning("⚠️ No MONGO_URI found or MongoClient unavailable, data persistence disabled")
     db = None
 
 # --- Persistence Functions ---
@@ -3249,6 +3282,7 @@ def stringify_keys(d):
     return d
 
 def save_all_data() -> None:
+    global voice_activity_weekly
     if db is None:
         logger.warning("Database not available, skipping save")
         return
@@ -3333,11 +3367,17 @@ def save_all_data() -> None:
         if voice_activity_alltime:
             db.voice_activity_alltime.insert_one({"data": stringify_keys(voice_activity_alltime)})
         
+        # Save voice_activity_weekly
+        db.voice_activity_weekly.delete_many({})
+        if voice_activity_weekly:
+            db.voice_activity_weekly.insert_one({"data": stringify_keys(voice_activity_weekly)})
+        
         logger.info("All data saved successfully")
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
 def load_all_data() -> None:
+    global voice_activity_weekly
     if db is None:
         logger.warning("Database not available, skipping load")
         return
@@ -3426,6 +3466,12 @@ def load_all_data() -> None:
         if doc:
             voice_activity_alltime.update(doc["data"])
         
+        # Load voice_activity_weekly
+        voice_activity_weekly.clear()
+        doc = db.voice_activity_weekly.find_one()
+        if doc:
+            voice_activity_weekly.update(doc["data"])
+        
         logger.info("All data loaded successfully")
     except Exception as e:
         logger.error(f"Error loading data: {e}")
@@ -3501,7 +3547,7 @@ async def set_ai_channel(ctx, channel: discord.TextChannel):
 
 @bot.command(name="settimezone")
 @commands.has_permissions(administrator=True)
-async def set_timezone(ctx, *, country_or_tz: str = None):
+async def set_timezone(ctx, *, country_or_tz: Optional[str] = None):
     if not country_or_tz or not isinstance(country_or_tz, str):
         await ctx.send("\u274c Please provide a valid country or timezone name.")
         return
@@ -3692,4 +3738,87 @@ def get_template_channels(guild_id):
         "Squad": {"id": settings.get("squad_channel_id"), "limit": 4},
         "Team": {"id": settings.get("team_channel_id"), "limit": 12},
     }
+
+from datetime import datetime
+
+def get_weekday_index():
+    # Returns 0 for Monday, 6 for Sunday (UTC)
+    return dt.datetime.utcnow().weekday()
+
+def update_weekly_voice_time(guild_id, user_id, seconds):
+    if guild_id not in voice_activity_weekly:
+        voice_activity_weekly[guild_id] = {}
+    if user_id not in voice_activity_weekly[guild_id]:
+        voice_activity_weekly[guild_id][user_id] = [0] * 7
+    idx = get_weekday_index()
+    voice_activity_weekly[guild_id][user_id][idx] += seconds
+
+# --- Weekly window rolling and role assignment ---
+def roll_weekly_voice_time():
+    for guild_id in voice_activity_weekly:
+        for user_id in voice_activity_weekly[guild_id]:
+            voice_activity_weekly[guild_id][user_id] = (
+                voice_activity_weekly[guild_id][user_id][1:] + [0]
+            )
+
+def get_top_weekly_user(guild_id):
+    if guild_id not in voice_activity_weekly:
+        return None, 0
+    user_times = voice_activity_weekly[guild_id]
+    if not user_times:
+        return None, 0
+    top_user_id, top_time = max(user_times.items(), key=lambda x: sum(x[1]))
+    return top_user_id, sum(user_times[top_user_id])
+
+async def assign_most_active_user_roles():
+    for guild in bot.guilds:
+        guild_id = guild.id
+        if guild_id not in voice_activity_weekly:
+            continue
+        user_times = voice_activity_weekly[guild_id]
+        if not user_times:
+            continue
+        top_user_id, top_time = get_top_weekly_user(guild_id)
+        if not top_user_id or top_time == 0:
+            continue
+        role_name = "Most Active User"
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await guild.create_role(name=role_name, color=discord.Color.gold(), reason="Weekly voice activity award")
+            except Exception as e:
+                logger.error(f"Failed to create role in {guild.name}: {e}")
+                continue
+        # Remove role from all members
+        for member in guild.members:
+            if role in member.roles:
+                try:
+                    await member.remove_roles(role, reason="Weekly voice activity reset")
+                except Exception as e:
+                    logger.error(f"Failed to remove role: {e}")
+        # Assign to top user
+        member = guild.get_member(int(top_user_id))
+        if member:
+            try:
+                await member.add_roles(role, reason="Most active in voice this week")
+                # Announce in system channel or first text channel
+                channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
+                if channel:
+                    await channel.send(f"🏆 {member.mention} is this week's **Most Active User** in voice channels!")
+            except Exception as e:
+                logger.error(f"Failed to assign role: {e}")
+
+# --- Weekly reset task ---
+async def reset_voice_activity_weekly():
+    while True:
+        now = discord.utils.utcnow()
+        next_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        await discord.utils.sleep_until(next_midnight)
+        # Only roll and assign on Monday (UTC)
+        if now.weekday() == 0:
+            roll_weekly_voice_time()
+            await assign_most_active_user_roles()
+            save_all_data()
+
+voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
 
