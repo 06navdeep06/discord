@@ -1,4 +1,7 @@
 # =========================================
+from dotenv import load_dotenv
+load_dotenv()
+
 # Discord Bot: Multi-Feature Server Manager
 # -----------------------------------------
 # This bot manages voice channels, moderation,
@@ -6,6 +9,8 @@
 # It uses MongoDB for data persistence and supports
 # per-guild (server) settings.
 # =========================================
+
+from dotenv import load_dotenv
 
 # --- Imports ---
 import discord  # Discord API wrapper
@@ -3645,7 +3650,7 @@ active_dm_conversations = {}  # {user_id: {"channel_id": channel_id, "moderator_
 music_queues = {}  # {guild_id: [track_dict, ...]}
 now_playing = {}   # {guild_id: track_dict}
 
-class YTDLSource(discord.PCMVolumeTransformer):
+
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
@@ -3765,4 +3770,16 @@ async def play(ctx, *, url: str):
     if not vc.is_playing():
         await play_next(ctx)
     else:
-        await ctx.send(f"�� Added to queue!")
+        await ctx.send(f" Added to queue!")
+
+token = os.getenv("TOKEN")
+if not token:
+    logger.error("❌ No TOKEN environment variable found!")
+    logger.error("Please set your Discord bot token in the Secrets tab.")
+else:
+    try:
+        bot.run(token)
+    except discord.LoginFailure:
+        logger.error("❌ Invalid Discord token!")
+    except Exception as e:
+        logger.error(f"❌ Bot startup error: {e}")
