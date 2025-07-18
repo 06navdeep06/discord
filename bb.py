@@ -1368,7 +1368,7 @@ async def on_message(message):
             # Spam prevention: only count if user hasn't sent >5 messages in last 10s
             guild_id = message.guild.id
             user_id = str(message.author.id)
-            now = datetime.utcnow().timestamp()
+            now = datetime.datetime.utcnow().timestamp()
             if guild_id not in chat_message_timestamps:
                 chat_message_timestamps[guild_id] = {}
             if user_id not in chat_message_timestamps[guild_id]:
