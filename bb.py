@@ -915,13 +915,22 @@ async def on_voice_state_update(member, before, after):
 
         # User joined a voice channel
         if after.channel and not before.channel:
-            voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
+            # Only set join_time if not self-deafened and not in AFK channel
+            settings = get_guild_settings(member.guild.id)
+            afk_channel_id = settings.get("afk_channel_id")
+            if not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+                voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
+            else:
+                voice_activity_today[guild_id][user_id]["join_time"] = None
 
         # User left a voice channel or switched
         elif before.channel and (not after.channel or before.channel != after.channel):
             join_time = voice_activity_today[guild_id][user_id]["join_time"]
             now = discord.utils.utcnow()
-            if join_time is not None:
+            settings = get_guild_settings(member.guild.id)
+            afk_channel_id = settings.get("afk_channel_id")
+            # Only count time if not self-deafened and not in AFK channel
+            if join_time is not None and not before.self_deaf and (not afk_channel_id or before.channel.id != afk_channel_id):
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
                         now = now.replace(tzinfo=timezone.utc)
@@ -934,13 +943,20 @@ async def on_voice_state_update(member, before, after):
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
                 update_weekly_voice_time(guild_id, user_id, time_spent)
-                voice_activity_today[guild_id][user_id]["join_time"] = None if not after.channel else discord.utils.utcnow()
+            # Reset join_time if still in a channel and not self-deafened/AFK
+            if after.channel and not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+                voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
+            else:
+                voice_activity_today[guild_id][user_id]["join_time"] = None
 
         # User switched channels (reset join time if still in voice)
         elif before.channel and after.channel and before.channel != after.channel:
             join_time = voice_activity_today[guild_id][user_id]["join_time"]
             now = discord.utils.utcnow()
-            if join_time is not None:
+            settings = get_guild_settings(member.guild.id)
+            afk_channel_id = settings.get("afk_channel_id")
+            # Only count time if not self-deafened and not in AFK channel
+            if join_time is not None and not before.self_deaf and (not afk_channel_id or before.channel.id != afk_channel_id):
                 if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
                     if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
                         now = now.replace(tzinfo=timezone.utc)
@@ -953,7 +969,11 @@ async def on_voice_state_update(member, before, after):
                 voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
                 voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
                 update_weekly_voice_time(guild_id, user_id, time_spent)
-            voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
+            # Reset join_time if still in a channel and not self-deafened/AFK
+            if after.channel and not after.self_deaf and (not afk_channel_id or after.channel.id != afk_channel_id):
+                voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
+            else:
+                voice_activity_today[guild_id][user_id]["join_time"] = None
 
         # Use per-guild AFK channel
         settings = get_guild_settings(member.guild.id)
