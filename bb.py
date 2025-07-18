@@ -5,6 +5,8 @@ load_dotenv()
 voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
 chat_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
 
+chat_message_timestamps = {}  # {guild_id: {user_id: [timestamps]}}
+
 # Discord Bot: Multi-Feature Server Manager
 # -----------------------------------------
 # This bot manages voice channels, moderation,
@@ -3354,6 +3356,204 @@ def stringify_keys(d):
         return {str(k): stringify_keys(v) for k, v in d.items()}
     return d
 
+def _save_miku_memory() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping miku_memory save")
+        return
+    try:
+        mem_data = [{"user_id": str(k), "history": list(v)} for k, v in miku_memory.user_history.items()]
+        db.miku_memory.delete_many({})
+        if mem_data:
+            db.miku_memory.insert_many(mem_data)
+        logger.debug("miku_memory saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving miku_memory: {e}")
+
+def _save_voice_activity_today() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_today save")
+        return
+    try:
+        db.voice_activity.delete_many({})
+        if voice_activity_today:
+            db.voice_activity.insert_one({"data": stringify_keys(voice_activity_today)})
+        logger.debug("voice_activity_today saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving voice_activity_today: {e}")
+
+def _save_channel_stats() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping channel_stats save")
+        return
+    try:
+        db.channel_stats.delete_many({})
+        if channel_stats:
+            db.channel_stats.insert_one({"data": stringify_keys(channel_stats)})
+        logger.debug("channel_stats saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving channel_stats: {e}")
+
+def _save_created_channels() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping created_channels save")
+        return
+    try:
+        db.created_channels.delete_many({})
+        if created_channels:
+            db.created_channels.insert_one({"ids": [str(k) for k in created_channels.keys()]})
+        logger.debug("created_channels saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving created_channels: {e}")
+
+def _save_everyone_warnings() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping everyone_warnings save")
+        return
+    try:
+        db.everyone_warnings.delete_many({})
+        if everyone_warnings:
+            db.everyone_warnings.insert_one({"data": stringify_keys(everyone_warnings)})
+        logger.debug("everyone_warnings saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving everyone_warnings: {e}")
+
+def _save_mention_spam_tracker() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping mention_spam_tracker save")
+        return
+    try:
+        tracker_data = [{"key": str(k), "timestamps": list(v)} for k, v in mention_spam_tracker.items()]
+        db.mention_spam_tracker.delete_many({})
+        if tracker_data:
+            db.mention_spam_tracker.insert_many(tracker_data)
+        logger.debug("mention_spam_tracker saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving mention_spam_tracker: {e}")
+
+def _save_mention_spam_warnings() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping mention_spam_warnings save")
+        return
+    try:
+        db.mention_spam_warnings.delete_many({})
+        if mention_spam_warnings:
+            db.mention_spam_warnings.insert_one({"data": stringify_keys(mention_spam_warnings)})
+        logger.debug("mention_spam_warnings saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving mention_spam_warnings: {e}")
+
+def _save_warnings_db() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping WARNINGS_DB save")
+        return
+    try:
+        db.warnings_db.delete_many({})
+        if WARNINGS_DB:
+            db.warnings_db.insert_one({"data": stringify_keys(WARNINGS_DB)})
+        logger.debug("WARNINGS_DB saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving WARNINGS_DB: {e}")
+
+def _save_server_stats() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping server_stats save")
+        return
+    try:
+        db.server_stats.delete_many({}) 
+        if server_stats:
+            db.server_stats.insert_one({"data": stringify_keys(server_stats)})
+        logger.debug("server_stats saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving server_stats: {e}")
+
+def _save_user_activity() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping user_activity save")
+        return
+    try:
+        db.user_activity.delete_many({})
+        if user_activity:
+            db.user_activity.insert_one({"data": stringify_keys(user_activity)})
+        logger.debug("user_activity saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving user_activity: {e}")
+
+def _save_message_cooldowns() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping message_cooldowns save")
+        return
+    try:
+        db.message_cooldowns.delete_many({})
+        if message_cooldowns:
+            db.message_cooldowns.insert_one({"data": stringify_keys(message_cooldowns)})
+        logger.debug("message_cooldowns saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving message_cooldowns: {e}")
+
+def _save_active_character_per_channel() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping active_character_per_channel save")
+        return
+    try:
+        db.active_characters.delete_many({})
+        if active_character_per_channel:
+            char_data = [{"channel_id": str(k), "character": v} for k, v in active_character_per_channel.items()]
+            if char_data:
+                db.active_characters.insert_many(char_data)
+        logger.debug("active_character_per_channel saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving active_character_per_channel: {e}")
+
+def _save_active_dm_conversations() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping active_dm_conversations save")
+        return
+    try:
+        db.active_dm_conversations.delete_many({})
+        if active_dm_conversations:
+            dm_data = [{"user_id": str(k), "data": v} for k, v in active_dm_conversations.items()]
+            if dm_data:
+                db.active_dm_conversations.insert_many(dm_data)
+        logger.debug("active_dm_conversations saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving active_dm_conversations: {e}")
+
+def _save_voice_activity_alltime() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_alltime save")
+        return
+    try:
+        db.voice_activity_alltime.delete_many({})
+        if voice_activity_alltime:
+            db.voice_activity_alltime.insert_one({"data": stringify_keys(voice_activity_alltime)})
+        logger.debug("voice_activity_alltime saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving voice_activity_alltime: {e}")
+
+def _save_voice_activity_weekly() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_weekly save")
+        return
+    try:
+        db.voice_activity_weekly.delete_many({})
+        if voice_activity_weekly:
+            db.voice_activity_weekly.insert_one({"data": stringify_keys(voice_activity_weekly)})
+        logger.debug("voice_activity_weekly saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving voice_activity_weekly: {e}")
+
+def _save_chat_activity_weekly() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping chat_activity_weekly save")
+        return
+    try:
+        db.chat_activity_weekly.delete_many({})
+        if chat_activity_weekly:
+            db.chat_activity_weekly.insert_one({"data": stringify_keys(chat_activity_weekly)})
+        logger.debug("chat_activity_weekly saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving chat_activity_weekly: {e}")
+
 def save_all_data() -> None:
     global voice_activity_weekly
     if db is None:
@@ -3361,98 +3561,251 @@ def save_all_data() -> None:
         return
         
     try:
-        # Save miku_memory
-        mem_data = [{"user_id": str(k), "history": list(v)} for k, v in miku_memory.user_history.items()]
-        db.miku_memory.delete_many({})
-        if mem_data:
-            db.miku_memory.insert_many(mem_data)
+        _save_miku_memory()
+
         
-        # Save voice_activity_today
-        db.voice_activity.delete_many({})
-        if voice_activity_today:
-            db.voice_activity.insert_one({"data": stringify_keys(voice_activity_today)})
+        _save_voice_activity_today()
         
-        # Save channel_stats
-        db.channel_stats.delete_many({})
-        if channel_stats:
-            db.channel_stats.insert_one({"data": stringify_keys(channel_stats)})
+        _save_channel_stats()
         
-        # Save created_channels
-        db.created_channels.delete_many({})
-        if created_channels:
-            db.created_channels.insert_one({"ids": [str(k) for k in created_channels.keys()]})
+        _save_created_channels()
         
-        # Save everyone_warnings
-        db.everyone_warnings.delete_many({})
-        if everyone_warnings:
-            db.everyone_warnings.insert_one({"data": stringify_keys(everyone_warnings)})
+        _save_everyone_warnings()
         
-        # Save mention_spam_tracker
-        tracker_data = [{"key": str(k), "timestamps": list(v)} for k, v in mention_spam_tracker.items()]
-        db.mention_spam_tracker.delete_many({})
-        if tracker_data:
-            db.mention_spam_tracker.insert_many(tracker_data)
+        _save_mention_spam_tracker()
         
-        # Save mention_spam_warnings
-        db.mention_spam_warnings.delete_many({})
-        if mention_spam_warnings:
-            db.mention_spam_warnings.insert_one({"data": stringify_keys(mention_spam_warnings)})
+        _save_mention_spam_warnings()
         
-        # Save WARNINGS_DB
-        db.warnings_db.delete_many({})
-        if WARNINGS_DB:
-            db.warnings_db.insert_one({"data": stringify_keys(WARNINGS_DB)})
+        _save_warnings_db()
         
-        # Save server_stats
-        db.server_stats.delete_many({})
-        if server_stats:
-            db.server_stats.insert_one({"data": stringify_keys(server_stats)})
+        _save_server_stats()
         
-        # Save user_activity
-        db.user_activity.delete_many({})
-        if user_activity:
-            db.user_activity.insert_one({"data": stringify_keys(user_activity)})
+        _save_user_activity()
         
-        # Save message_cooldowns
-        db.message_cooldowns.delete_many({})
-        if message_cooldowns:
-            db.message_cooldowns.insert_one({"data": stringify_keys(message_cooldowns)})
+        _save_message_cooldowns()
             
         
-        # Save active_character_per_channel
-        db.active_characters.delete_many({})
-        if active_character_per_channel:
-            char_data = [{"channel_id": str(k), "character": v} for k, v in active_character_per_channel.items()]
-            if char_data:
-                db.active_characters.insert_many(char_data)
+        _save_active_character_per_channel()
         
-        # Save active_dm_conversations
-        db.active_dm_conversations.delete_many({})
-        if active_dm_conversations:
-            dm_data = [{"user_id": str(k), "data": v} for k, v in active_dm_conversations.items()]
-            if dm_data:
-                db.active_dm_conversations.insert_many(dm_data)
+        _save_active_dm_conversations()
         
         
         
-        # Save voice_activity_alltime
-        db.voice_activity_alltime.delete_many({})
-        if voice_activity_alltime:
-            db.voice_activity_alltime.insert_one({"data": stringify_keys(voice_activity_alltime)})
+        _save_voice_activity_alltime()
         
-        # Save voice_activity_weekly
-        db.voice_activity_weekly.delete_many({})
-        if voice_activity_weekly:
-            db.voice_activity_weekly.insert_one({"data": stringify_keys(voice_activity_weekly)})
+        _save_voice_activity_weekly()
         
-        # Save chat_activity_weekly
-        db.chat_activity_weekly.delete_many({})
-        if chat_activity_weekly:
-            db.chat_activity_weekly.insert_one({"data": stringify_keys(chat_activity_weekly)})
+        _save_chat_activity_weekly()
         
         logger.info("All data saved successfully")
     except Exception as e:
         logger.error(f"Error saving data: {e}")
+
+def _load_miku_memory() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping miku_memory load")
+        return
+    try:
+        miku_memory.user_history.clear()
+        for doc in db.miku_memory.find():
+            miku_memory.user_history[doc["user_id"]] = deque(doc["history"], maxlen=5)
+        logger.debug("miku_memory loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading miku_memory: {e}")
+
+def _load_voice_activity_today() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_today load")
+        return
+    try:
+        voice_activity_today.clear()
+        doc = db.voice_activity.find_one()
+        if doc:
+            voice_activity_today.update(doc["data"])
+        logger.debug("voice_activity_today loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading voice_activity_today: {e}")
+
+def _load_channel_stats() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping channel_stats load")
+        return
+    try:
+        doc = db.channel_stats.find_one()
+        if doc:
+            channel_stats.clear()
+            channel_stats.update(doc["data"])
+        logger.debug("channel_stats loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading channel_stats: {e}")
+
+def _load_created_channels() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping created_channels load")
+        return
+    try:
+        created_channels.clear()
+        doc = db.created_channels.find_one()
+        if doc:
+            for cid in doc["ids"]:
+                created_channels[int(cid)] = True
+        logger.debug("created_channels loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading created_channels: {e}")
+
+def _load_everyone_warnings() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping everyone_warnings load")
+        return
+    try:
+        everyone_warnings.clear()
+        doc = db.everyone_warnings.find_one()
+        if doc:
+            everyone_warnings.update(doc["data"])
+        logger.debug("everyone_warnings loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading everyone_warnings: {e}")
+
+def _load_mention_spam_tracker() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping mention_spam_tracker load")
+        return
+    try:
+        mention_spam_tracker.clear()
+        for doc in db.mention_spam_tracker.find():
+            key = eval(doc["key"])
+            mention_spam_tracker[key] = deque(doc["timestamps"], maxlen=MENTION_SPAM_THRESHOLD)
+        logger.debug("mention_spam_tracker loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading mention_spam_tracker: {e}")
+
+def _load_mention_spam_warnings() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping mention_spam_warnings load")
+        return
+    try:
+        mention_spam_warnings.clear()
+        doc = db.mention_spam_warnings.find_one()
+        if doc:
+            mention_spam_warnings.update(doc["data"])
+        logger.debug("mention_spam_warnings loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading mention_spam_warnings: {e}")
+
+def _load_warnings_db() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping WARNINGS_DB load")
+        return
+    try:
+        WARNINGS_DB.clear()
+        doc = db.warnings_db.find_one()
+        if doc:
+            WARNINGS_DB.update(doc["data"])
+        logger.debug("WARNINGS_DB loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading WARNINGS_DB: {e}")
+
+def _load_server_stats() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping server_stats load")
+        return
+    try:
+        server_stats.clear()
+        doc = db.server_stats.find_one()
+        if doc:
+            server_stats.update(doc["data"])
+        logger.debug("server_stats loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading server_stats: {e}")
+
+def _load_user_activity() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping user_activity load")
+        return
+    try:
+        user_activity.clear()
+        doc = db.user_activity.find_one()
+        if doc:
+            user_activity.update(doc["data"])
+        logger.debug("user_activity loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading user_activity: {e}")
+
+def _load_message_cooldowns() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping message_cooldowns load")
+        return
+    try:
+        message_cooldowns.clear()
+        doc = db.message_cooldowns.find_one()
+        if doc:
+            message_cooldowns.update(doc["data"])
+        logger.debug("message_cooldowns loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading message_cooldowns: {e}")
+
+def _load_active_character_per_channel() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping active_character_per_channel load")
+        return
+    try:
+        active_character_per_channel.clear()
+        for doc in db.active_characters.find():
+            active_character_per_channel[int(doc["channel_id"])] = doc["character"]
+        logger.debug("active_character_per_channel loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading active_character_per_channel: {e}")
+
+def _load_active_dm_conversations() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping active_dm_conversations load")
+        return
+    try:
+        active_dm_conversations.clear()
+        for doc in db.active_dm_conversations.find():
+            active_dm_conversations[int(doc["user_id"])] = doc["data"]
+        logger.debug("active_dm_conversations loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading active_dm_conversations: {e}")
+
+def _load_voice_activity_alltime() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_alltime load")
+        return
+    try:
+        voice_activity_alltime.clear()
+        doc = db.voice_activity_alltime.find_one()
+        if doc:
+            voice_activity_alltime.update(doc["data"])
+        logger.debug("voice_activity_alltime loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading voice_activity_alltime: {e}")
+
+def _load_voice_activity_weekly() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping voice_activity_weekly load")
+        return
+    try:
+        voice_activity_weekly.clear()
+        doc = db.voice_activity_weekly.find_one()
+        if doc:
+            voice_activity_weekly.update(doc["data"])
+        logger.debug("voice_activity_weekly loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading voice_activity_weekly: {e}")
+
+def _load_chat_activity_weekly() -> None:
+    if db is None:
+        logger.warning("Database not available, skipping chat_activity_weekly load")
+        return
+    try:
+        chat_activity_weekly.clear()
+        doc = db.chat_activity_weekly.find_one()
+        if doc:
+            chat_activity_weekly.update(doc["data"])
+        logger.debug("chat_activity_weekly loaded successfully")
+    except Exception as e:
+        logger.error(f"Error loading chat_activity_weekly: {e}")
 
 def load_all_data() -> None:
     global voice_activity_weekly
@@ -3462,99 +3815,37 @@ def load_all_data() -> None:
 
         
     try:
-        # Load miku_memory
-        miku_memory.user_history.clear()
-        for doc in db.miku_memory.find():
-            miku_memory.user_history[doc["user_id"]] = deque(doc["history"], maxlen=5)
+        _load_miku_memory()
         
-        # Load voice_activity_today
-        voice_activity_today.clear()
-        doc = db.voice_activity.find_one()
-        if doc:
-            voice_activity_today.update(doc["data"])
+        _load_voice_activity_today()
         
-        # Load channel_stats
-        doc = db.channel_stats.find_one()
-        if doc:
-            channel_stats.clear()
-            channel_stats.update(doc["data"])
+        _load_channel_stats()
         
-        # Load created_channels
-        created_channels.clear()
-        doc = db.created_channels.find_one()
-        if doc:
-            for cid in doc["ids"]:
-                created_channels[int(cid)] = True
+        _load_created_channels()
         
-        # Load everyone_warnings
-        everyone_warnings.clear()
-        doc = db.everyone_warnings.find_one()
-        if doc:
-            everyone_warnings.update(doc["data"])
+        _load_everyone_warnings()
         
-        # Load mention_spam_tracker
-        mention_spam_tracker.clear()
-        for doc in db.mention_spam_tracker.find():
-            key = eval(doc["key"])
-            mention_spam_tracker[key] = deque(doc["timestamps"], maxlen=MENTION_SPAM_THRESHOLD)
+        _load_mention_spam_tracker()
         
-        # Load mention_spam_warnings
-        mention_spam_warnings.clear()
-        doc = db.mention_spam_warnings.find_one()
-        if doc:
-            mention_spam_warnings.update(doc["data"])
+        _load_mention_spam_warnings()
         
-        # Load WARNINGS_DB
-        WARNINGS_DB.clear()
-        doc = db.warnings_db.find_one()
-        if doc:
-            WARNINGS_DB.update(doc["data"])
+        _load_warnings_db()
 
-        # Load server_stats
-        doc = db.server_stats.find_one()
-        if doc:
-            server_stats.clear()
-            server_stats.update(doc["data"])
+        _load_server_stats()
         
-        # Load user_activity
-        doc = db.user_activity.find_one()
-        if doc:
-            user_activity.clear()
-            user_activity.update(doc["data"])
+        _load_user_activity()
         
-        # Load message_cooldowns
-        doc = db.message_cooldowns.find_one()
-        if doc:
-            message_cooldowns.clear()
-            message_cooldowns.update(doc["data"])
+        _load_message_cooldowns()
         
-        # Load active_character_per_channel
-        active_character_per_channel.clear()
-        for doc in db.active_characters.find():
-            active_character_per_channel[int(doc["channel_id"])] = doc["character"]
+        _load_active_character_per_channel()
         
-        # Load active_dm_conversations
-        active_dm_conversations.clear()
-        for doc in db.active_dm_conversations.find():
-            active_dm_conversations[int(doc["user_id"])] = doc["data"]
+        _load_active_dm_conversations()
         
-        # Load voice_activity_alltime
-        voice_activity_alltime.clear()
-        doc = db.voice_activity_alltime.find_one()
-        if doc:
-            voice_activity_alltime.update(doc["data"])
+        _load_voice_activity_alltime()
         
-        # Load voice_activity_weekly
-        voice_activity_weekly.clear()
-        doc = db.voice_activity_weekly.find_one()
-        if doc:
-            voice_activity_weekly.update(doc["data"])
+        _load_voice_activity_weekly()
         
-        # Load chat_activity_weekly
-        chat_activity_weekly.clear()
-        doc = db.chat_activity_weekly.find_one()
-        if doc:
-            chat_activity_weekly.update(doc["data"])
+        _load_chat_activity_weekly()
         
         logger.info("All data loaded successfully")
     except Exception as e:
