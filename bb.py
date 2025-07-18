@@ -1350,6 +1350,27 @@ async def on_message(message):
         if message.content.startswith("!"):
             server_stats["commands_used"] += 1
 
+        # --- In on_message, after confirming not a bot and in a guild ---
+        # (Move this code block inside the on_message event handler, after confirming not a bot and in a guild)
+        settings = get_guild_settings(message.guild.id)
+        ai_channel_id = settings.get("ai_channel_id")
+        # Exclude messages in AI/Miku channel
+        if not (ai_channel_id and message.channel.id == ai_channel_id):
+            # Spam prevention: only count if user hasn't sent >5 messages in last 10s
+            guild_id = message.guild.id
+            user_id = str(message.author.id)
+            now = datetime.utcnow().timestamp()
+            if guild_id not in chat_message_timestamps:
+                chat_message_timestamps[guild_id] = {}
+            if user_id not in chat_message_timestamps[guild_id]:
+                chat_message_timestamps[guild_id][user_id] = []
+            timestamps = chat_message_timestamps[guild_id][user_id]
+            # Remove old timestamps
+            chat_message_timestamps[guild_id][user_id] = [t for t in timestamps if now - t < 10]
+            if len(chat_message_timestamps[guild_id][user_id]) < 5:
+                update_weekly_chat_activity(guild_id, user_id)
+                chat_message_timestamps[guild_id][user_id].append(now)
+
     except Exception as e:
         logger.error(f"Error in message event: {e}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
@@ -3394,6 +3415,11 @@ def save_all_data() -> None:
         if voice_activity_weekly:
             db.voice_activity_weekly.insert_one({"data": stringify_keys(voice_activity_weekly)})
         
+        # Save chat_activity_weekly
+        db.chat_activity_weekly.delete_many({})
+        if chat_activity_weekly:
+            db.chat_activity_weekly.insert_one({"data": stringify_keys(chat_activity_weekly)})
+        
         logger.info("All data saved successfully")
     except Exception as e:
         logger.error(f"Error saving data: {e}")
@@ -3493,6 +3519,12 @@ def load_all_data() -> None:
         doc = db.voice_activity_weekly.find_one()
         if doc:
             voice_activity_weekly.update(doc["data"])
+        
+        # Load chat_activity_weekly
+        chat_activity_weekly.clear()
+        doc = db.chat_activity_weekly.find_one()
+        if doc:
+            chat_activity_weekly.update(doc["data"])
         
         logger.info("All data loaded successfully")
     except Exception as e:
@@ -3844,4 +3876,99 @@ async def reset_voice_activity_weekly():
             save_all_data()
 
 voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
+
+# Add after other globals
+chat_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
+chat_message_timestamps = {}  # {guild_id: {user_id: [timestamps]}}
+
+# Helper for chat activity
+def update_weekly_chat_activity(guild_id, user_id):
+    if guild_id not in chat_activity_weekly:
+        chat_activity_weekly[guild_id] = {}
+    if user_id not in chat_activity_weekly[guild_id]:
+        chat_activity_weekly[guild_id][user_id] = [0] * 7
+    idx = get_weekday_index()
+    chat_activity_weekly[guild_id][user_id][idx] += 1
+
+def roll_weekly_chat_activity():
+    for guild_id in chat_activity_weekly:
+        for user_id in chat_activity_weekly[guild_id]:
+            chat_activity_weekly[guild_id][user_id] = (
+                chat_activity_weekly[guild_id][user_id][1:] + [0]
+            )
+
+async def assign_most_active_chatter_roles():
+    for guild in bot.guilds:
+        guild_id = guild.id
+        if guild_id not in chat_activity_weekly:
+            continue
+        user_counts = chat_activity_weekly[guild_id]
+        if not user_counts:
+            continue
+        top_user_id, top_count = max(user_counts.items(), key=lambda x: sum(x[1]))
+        if not top_user_id or top_count == 0:
+            continue
+        role_name = "Most Active Chatter"
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await guild.create_role(name=role_name, color=discord.Color.blue(), reason="Weekly chat activity award")
+            except Exception as e:
+                logger.error(f"Failed to create chat role in {guild.name}: {e}")
+                continue
+        # Remove role from all members
+        for member in guild.members:
+            if role in member.roles:
+                try:
+                    await member.remove_roles(role, reason="Weekly chat activity reset")
+                except Exception as e:
+                    logger.error(f"Failed to remove chat role: {e}")
+        # Assign to top user
+        member = guild.get_member(int(top_user_id))
+        if member:
+            try:
+                await member.add_roles(role, reason="Most active in chat this week")
+                channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
+                if channel:
+                    await channel.send(f"💬 {member.mention} is this week's **Most Active Chatter**!")
+            except Exception as e:
+                logger.error(f"Failed to assign chat role: {e}")
+
+# --- In on_message, after confirming not a bot and in a guild ---
+    if not message.author.bot and message.guild:
+        settings = get_guild_settings(message.guild.id)
+        ai_channel_id = settings.get("ai_channel_id")
+        # Exclude messages in AI/Miku channel
+        if not (ai_channel_id and message.channel.id == ai_channel_id):
+            # Spam prevention: only count if user hasn't sent >5 messages in last 10s
+            guild_id = message.guild.id
+            user_id = str(message.author.id)
+            now = datetime.utcnow().timestamp()
+            if guild_id not in chat_message_timestamps:
+                chat_message_timestamps[guild_id] = {}
+            if user_id not in chat_message_timestamps[guild_id]:
+                chat_message_timestamps[guild_id][user_id] = []
+            timestamps = chat_message_timestamps[guild_id][user_id]
+            # Remove old timestamps
+            chat_message_timestamps[guild_id][user_id] = [t for t in timestamps if now - t < 10]
+            if len(chat_message_timestamps[guild_id][user_id]) < 5:
+                update_weekly_chat_activity(guild_id, user_id)
+                chat_message_timestamps[guild_id][user_id].append(now)
+
+# --- In weekly reset task, after rolling voice activity and assigning voice role ---
+    roll_weekly_chat_activity()
+    await assign_most_active_chatter_roles()
+
+# --- Persistence: Add to save_all_data and load_all_data ---
+# In save_all_data:
+        # Save chat_activity_weekly
+        db.chat_activity_weekly.delete_many({})
+        if chat_activity_weekly:
+            db.chat_activity_weekly.insert_one({"data": stringify_keys(chat_activity_weekly)})
+# In load_all_data:
+        # Load chat_activity_weekly
+        chat_activity_weekly.clear()
+        doc = db.chat_activity_weekly.find_one()
+        if doc:
+            chat_activity_weekly.update(doc["data"])
 
