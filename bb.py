@@ -463,25 +463,6 @@ server_stats = {
 user_activity = {}
 message_cooldowns = {}
 
-# List of available Gemini models (prioritized)
-GEMINI_MODELS = [
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-002",
-    "gemini-1.5-flash-8b-latest",
-    "gemini-1.5-flash-8b",
-    "gemini-1.5-flash-8b-001",
-    "gemini-1.5-pro-latest",
-    "gemini-1.5-pro",
-    "gemini-1.5-pro-002"
-]
-current_model_index = 0
-
-def get_current_model_url():
-    model_name = GEMINI_MODELS[current_model_index]
-    logger.info(f"Using Gemini model: {model_name}")
-    return f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-
 class MikuMemory:
     def __init__(self, max_history=5):
         self.user_history = defaultdict(lambda: deque(maxlen=max_history))
@@ -727,7 +708,8 @@ async def on_ready():
     bot.loop.create_task(heartbeat())
     bot.loop.create_task(reset_voice_activity())
     bot.loop.create_task(reset_daily_stats())
-    bot.loop.create_task(reset_voice_activity_weekly())
+    
+    # Remove the duplicate task creation since it's now properly integrated in the function
 
 
 @bot.event
@@ -1372,20 +1354,20 @@ async def on_message(message):
         ai_channel_id = settings.get("ai_channel_id")
         # Exclude messages in AI/Miku channel
         if not (ai_channel_id and message.channel.id == ai_channel_id):
-            # Spam prevention: only count if user hasn't sent >5 messages in last 10s
-            guild_id = message.guild.id
-            user_id = str(message.author.id)
-            now = datetime.datetime.utcnow().timestamp()
-            if guild_id not in chat_message_timestamps:
-                chat_message_timestamps[guild_id] = {}
-            if user_id not in chat_message_timestamps[guild_id]:
-                chat_message_timestamps[guild_id][user_id] = []
-            timestamps = chat_message_timestamps[guild_id][user_id]
-            # Remove old timestamps
-            chat_message_timestamps[guild_id][user_id] = [t for t in timestamps if now - t < 10]
-            if len(chat_message_timestamps[guild_id][user_id]) < 5:
-                update_weekly_chat_activity(guild_id, user_id)
-                chat_message_timestamps[guild_id][user_id].append(now)
+            # Only count if not a bot and not a command
+            if not message.author.bot and not message.content.startswith("!"):
+                guild_id = message.guild.id
+                user_id = str(message.author.id)
+                now = datetime.datetime.utcnow().timestamp()
+                if guild_id not in chat_message_timestamps:
+                    chat_message_timestamps[guild_id] = {}
+                if user_id not in chat_message_timestamps[guild_id]:
+                    chat_message_timestamps[guild_id][user_id] = []
+                timestamps = chat_message_timestamps[guild_id][user_id]
+                chat_message_timestamps[guild_id][user_id] = [t for t in timestamps if now - t < 10]
+                if len(chat_message_timestamps[guild_id][user_id]) < 5:
+                    update_weekly_chat_activity(guild_id, user_id)
+                    chat_message_timestamps[guild_id][user_id].append(now)
 
     except Exception as e:
         logger.error(f"Error in message event: {e}")
@@ -1545,75 +1527,74 @@ async def cleanup(ctx):
 
 @bot.command(name="voiceactivity", aliases=["va"])
 async def voice_activity(ctx, mode: Optional[str] = None):
-    """Show today's or all-time voice channel activity leaderboard with real-time accuracy
-    Usage: !voiceactivity [alltime]
+    """Show all-time (default) or today's voice channel activity leaderboard
+    Usage: !va [today]
     """
     try:
         guild_id = ctx.guild.id
-        if mode == "alltime":
-            if guild_id not in voice_activity_alltime or not voice_activity_alltime[guild_id]:
-                await ctx.send("No all-time voice activity recorded!")
+        if mode == "today":
+            if guild_id not in voice_activity_today or not voice_activity_today[guild_id]:
+                await ctx.send("No voice activity recorded today!")
                 return
-            sorted_activity = sorted(voice_activity_alltime[guild_id].items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
+            now = discord.utils.utcnow()
+            up_to_date_activity = {}
+            for user_id, data in voice_activity_today[guild_id].items():
+                total_time = data.get("total_time", 0)
+                join_time = data.get("join_time")
+                naive_now = now.replace(tzinfo=None) if getattr(now, 'tzinfo', None) is not None else now
+                naive_join_time = join_time.replace(tzinfo=None) if join_time and getattr(join_time, 'tzinfo', None) is not None else join_time
+                if naive_join_time:
+                    total_time += (naive_now - naive_join_time).total_seconds()
+                up_to_date_activity[user_id] = {
+                    "name": data.get("name", f"User {user_id}"),
+                    "total_time": total_time
+                }
+            sorted_activity = sorted(up_to_date_activity.items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
             embed = discord.Embed(
-                title="🎙️ All-Time Voice Activity Leaders",
-                description="Most active users in voice channels (all-time)",
-                color=0xFFD700)
+                title="🎙️ Today's Voice Activity Leaders (Real-Time)",
+                description="Most active users in voice channels today (real-time)",
+                color=0x00ff88)
             leaderboard_text = ""
             titles = [
-                "Legend", "Veteran", "Master", "Pro", "Expert", "Ace", "Star", "Hero", "Icon", "MVP"
+                "Pioneer", "Trailblazer", "Innovator", "Champion", "Elite", "Vanguard",
+                "Topper", "Winner", "Distinction", "Honor"
             ]
             for i, (user_id, data) in enumerate(sorted_activity, 1):
                 hours = int(data["total_time"] // 3600)
                 minutes = int((data["total_time"] % 3600) // 60)
                 time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
                 title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
-                medal = "🏆" if i == 1 else f"{i}."
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
                 leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
             embed.add_field(name="🏆 Leaderboard", value=leaderboard_text or "No data", inline=False)
-            embed.add_field(name="Prize", value="Top 3 get legendary status! 🏅", inline=False)
-            embed.set_footer(text="All-time stats (since tracking began)")
+            embed.add_field(name="Prize", value="Top 3 get bragging rights! 🎉", inline=False)
+            embed.set_footer(text="Resets daily at midnight UTC")
             embed.timestamp = discord.utils.utcnow()
             await ctx.send(embed=embed)
             return
-        # ... existing code for daily leaderboard ...
-        if guild_id not in voice_activity_today or not voice_activity_today[guild_id]:
-            await ctx.send("No voice activity recorded today!")
+        # Default: all-time
+        if guild_id not in voice_activity_alltime or not voice_activity_alltime[guild_id]:
+            await ctx.send("No all-time voice activity recorded!")
             return
-        now = discord.utils.utcnow()
-        up_to_date_activity = {}
-        for user_id, data in voice_activity_today[guild_id].items():
-            total_time = data.get("total_time", 0)
-            join_time = data.get("join_time")
-            naive_now = now.replace(tzinfo=None) if getattr(now, 'tzinfo', None) is not None else now
-            naive_join_time = join_time.replace(tzinfo=None) if join_time and getattr(join_time, 'tzinfo', None) is not None else join_time
-            if naive_join_time:
-                # Add ongoing session time
-                total_time += (naive_now - naive_join_time).total_seconds()
-            up_to_date_activity[user_id] = {
-                "name": data.get("name", f"User {user_id}"),
-                "total_time": total_time
-            }
-        sorted_activity = sorted(up_to_date_activity.items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
+        sorted_activity = sorted(voice_activity_alltime[guild_id].items(), key=lambda x: x[1]["total_time"], reverse=True)[:10]
         embed = discord.Embed(
-            title="🎙️ Today's Voice Activity Leaders (Real-Time)",
-            description="Most active users in voice channels today (real-time)",
-            color=0x00ff88)
+            title="🎙️ All-Time Voice Activity Leaders",
+            description="Most active users in voice channels (all-time)",
+            color=0xFFD700)
         leaderboard_text = ""
         titles = [
-            "Pioneer", "Trailblazer", "Innovator", "Champion", "Elite", "Vanguard",
-            "Topper", "Winner", "Distinction", "Honor"
+            "Legend", "Veteran", "Master", "Pro", "Expert", "Ace", "Star", "Hero", "Icon", "MVP"
         ]
         for i, (user_id, data) in enumerate(sorted_activity, 1):
             hours = int(data["total_time"] // 3600)
             minutes = int((data["total_time"] % 3600) // 60)
             time_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
             title = titles[i - 1] if i <= len(titles) else f"Rank {i}"
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+            medal = "🏆" if i == 1 else f"{i}."
             leaderboard_text += f"{medal} **{data['name']}** - {time_str} ({title})\n"
         embed.add_field(name="🏆 Leaderboard", value=leaderboard_text or "No data", inline=False)
-        embed.add_field(name="Prize", value="Top 3 get bragging rights! 🎉", inline=False)
-        embed.set_footer(text="Resets daily at midnight UTC")
+        embed.add_field(name="Prize", value="Top 3 get legendary status! 🏅", inline=False)
+        embed.set_footer(text="All-time stats (since tracking began)")
         embed.timestamp = discord.utils.utcnow()
         await ctx.send(embed=embed)
     except Exception as e:
@@ -3993,14 +3974,19 @@ class YTDLSource(discord.PCMVolumeTransformer):
             'no_warnings': True,
             'default_search': 'auto',
             'source_address': '0.0.0.0',
-            'cookies': '/home/ubuntu/discord/cookies.txt',
+            'cookiesfrombrowser': 'chrome', # Or 'firefox', 'edge', etc. Requires 'browser_cookie3' library.
         }
         ffmpeg_options = {
             'options': '-vn'
         }
         ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        except Exception as e:
+            logger.error(f"Error extracting info for {url}: {e}")
+            return None
+
         if 'entries' in data:
             data = data['entries'][0]
         filename = data['url'] if stream else ytdl.prepare_filename(data)
@@ -4052,6 +4038,11 @@ async def play_next(ctx):
     track = queue.pop(0)
     now_playing[guild_id] = track
     source = await YTDLSource.from_url(track['url'], loop=bot.loop, stream=True)
+    if source is None:
+        logger.error(f"Failed to get YTDLSource for {track['url']}. Skipping to next song.")
+        await ctx.send(f"❌ Could not play **{track.get('url', 'unknown song')}**. Skipping to next song.")
+        bot.loop.create_task(play_next(ctx)) # Try to play the next song
+        return
     ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
     await ctx.send(f"🎶 Now playing: **{source.title}**")
 
@@ -4104,6 +4095,58 @@ async def play(ctx, *, url: str):
         await play_next(ctx)
     else:
         await ctx.send(f" Added to queue!")
+
+async def reset_voice_activity_weekly() -> None:
+    while True:
+        now = discord.utils.utcnow()
+        # Find next Monday 00:00 UTC
+        days_ahead = 7 - now.weekday()  # 0=Monday
+        if days_ahead == 0:
+            days_ahead = 7
+        next_week = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=days_ahead)
+        await discord.utils.sleep_until(next_week)
+        for guild in bot.guilds:
+            guild_id = guild.id
+            weekly = voice_activity_weekly.get(guild_id, {})
+            if not weekly:
+                continue
+            # Find top user
+            user_totals = {user_id: sum(days) for user_id, days in weekly.items()}
+            if not user_totals:
+                continue
+            top_user_id = max(user_totals, key=user_totals.get)
+            top_member = guild.get_member(int(top_user_id))
+            if not top_member:
+                continue
+            # Role management
+            role_name = "Voice Champion of the Week"
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                role = await guild.create_role(name=role_name, color=discord.Color.gold(), reason="Weekly VC Champion")
+            # Remove from all others
+            for member in guild.members:
+                if role in member.roles and member != top_member:
+                    try:
+                        await member.remove_roles(role, reason="New champion this week")
+                    except Exception:
+                        pass
+            # Add to winner
+            if role not in top_member.roles:
+                try:
+                    await top_member.add_roles(role, reason="Awarded for most VC hours this week")
+                except Exception:
+                    pass
+            # Announce
+            channel = guild.system_channel or guild.text_channels[0]
+            if channel:
+                try:
+                    await channel.send(f"🏆 {top_member.mention} is the Voice Champion of the Week with {int(user_totals[top_user_id]//3600)}h {(int(user_totals[top_user_id])%3600)//60}m in VC!")
+                except Exception:
+                    pass
+        # Reset weekly data
+        voice_activity_weekly.clear()
+        save_all_data()
+        logger.info("Reset weekly voice activity and awarded champion role.")
 
 token = os.getenv("TOKEN")
 if not token:
