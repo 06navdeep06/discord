@@ -6,3 +6,4 @@ psutil
 pytz
 countryinfo
 spotipy
+yt-dlp
