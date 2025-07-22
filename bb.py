@@ -680,6 +680,11 @@ async def on_ready():
     if bot.user:
         logger.info(f"✅ Logged in as {bot.user.name}")
     logger.info(f"Bot is in {len(bot.guilds)} guilds")
+
+    # Ensure bot.loop is set
+    if not hasattr(bot, 'loop') or bot.loop is discord.utils.MISSING:
+        bot.loop = asyncio.get_event_loop()
+        logger.warning("Bot.loop was missing, explicitly set it in on_ready.")
     
     # Set bot startup time for uptime tracking
     setattr(bot, 'start_time', discord.utils.utcnow())
@@ -4009,7 +4014,16 @@ async def ensure_voice(ctx):
         return None
     channel = ctx.author.voice.channel
     if ctx.voice_client is None:
-        await channel.connect()
+        try:
+            await channel.connect()
+        except asyncio.TimeoutError:
+            await ctx.send("❌ Failed to connect to voice channel: Connection timed out.")
+            logger.error(f"TimeoutError when connecting to voice channel {channel.name} in guild {ctx.guild.name}")
+            return None
+        except Exception as e:
+            await ctx.send(f"❌ An unexpected error occurred while connecting to voice channel: {e}")
+            logger.error(f"Error connecting to voice channel {channel.name} in guild {ctx.guild.name}: {e}")
+            return None
     elif ctx.voice_client.channel != channel:
         await ctx.voice_client.move_to(channel)
     return ctx.voice_client
