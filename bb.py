@@ -3842,12 +3842,6 @@ async def set_ai_channel(ctx, channel: discord.TextChannel):
     set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
     await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
 
-@bot.command(name="setmatchchannel")
-@commands.has_permissions(administrator=True)
-async def set_match_channel(ctx, channel: discord.TextChannel):
-    set_guild_setting(ctx.guild.id, "match_channel_id", channel.id)
-    await ctx.send(f"✅ Matchmaking channel set to {channel.mention}")
-
 @bot.command(name="settimezone")
 @commands.has_permissions(administrator=True)
 async def set_timezone(ctx, *, country_or_tz: Optional[str] = None):
