@@ -2705,27 +2705,62 @@ class LobbyView(discord.ui.View):
         self.players = [author]
         self.message = None
         self.vc = vc
+        self.started = False
+
+        # Dynamically add the 'Start Early' button
+        self.start_early_button = discord.ui.button(label="Start Early", style=discord.ButtonStyle.primary, emoji="🚀", custom_id="start_early", disabled=True)(self.start_early_callback)
+        self.add_item(self.start_early_button)
 
     async def update_embed(self, interaction: discord.Interaction):
-        player_mentions = "\n".join([p.mention for p in self.players])
+        """Updates the lobby embed with the current player list and status."""
+        player_mentions = "\n".join([f"- {p.mention}" for p in self.players])
+        expires_at = discord.utils.utcnow() + datetime.timedelta(seconds=self.timeout)
+        
         embed = discord.Embed(
             title=f"✨ {self.game.capitalize()} Lobby ✨",
-            description=f"**Players ({len(self.players)}/{self.limit})**:\n{player_mentions}\n\nVoice Channel: {self.vc.mention}",
             color=0x2ecc71
         )
-        embed.set_footer(text=f"Lobby created by {self.author.display_name}")
+        embed.set_author(name=f"Lobby created by {self.author.display_name}", icon_url=self.author.display_avatar)
+        embed.add_field(name="👥 Players", value=f"{len(self.players)}/{self.limit}", inline=True)
+        embed.add_field(name="🎙️ Voice Channel", value=self.vc.mention, inline=True)
+        embed.add_field(name="📋 Player List", value=player_mentions or "No one else has joined yet.", inline=False)
+        embed.set_footer(text=f"Lobby expires")
+        embed.timestamp = expires_at
+
+        # Enable/disable the 'Start Early' button
+        self.start_early_button.disabled = not (interaction.user == self.author and len(self.players) > 1)
+
         await interaction.message.edit(embed=embed, view=self)
+
+    async def start_match(self, interaction: discord.Interaction):
+        """Locks the lobby and starts the match."""
+        if self.started:
+            return
+        self.started = True
+
+        # Disable all buttons
+        for item in self.children:
+            item.disabled = True
+
+        embed = interaction.message.embeds[0]
+        embed.title = f"🚀 Match Starting: {self.game.capitalize()} 🚀"
+        embed.color = discord.Color.gold()
+        embed.description = "The lobby is now locked. Good luck, have fun!"
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.followup.send("Match is starting!", ephemeral=True)
+        self.stop()
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, emoji="✅")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user in self.players:
             return await interaction.response.send_message("You are already in the lobby.", ephemeral=True)
-        
         if len(self.players) >= self.limit:
             return await interaction.response.send_message("This lobby is full.", ephemeral=True)
 
+        await interaction.response.defer()
         self.players.append(interaction.user)
         if interaction.user.voice:
+            # Retry logic for moving user
             moved = False
             for attempt in range(3):
                 try:
@@ -2733,20 +2768,11 @@ class LobbyView(discord.ui.View):
                     moved = True
                     break
                 except discord.DiscordServerError:
-                    await asyncio.sleep(1 + attempt) # Exponential backoff
+                    await asyncio.sleep(1 + attempt)
                 except (discord.Forbidden, discord.HTTPException):
-                    # Permissions error, no point in retrying
                     break
-
             if not moved:
-                for attempt in range(3):
-                    try:
-                        await interaction.followup.send("I couldn't move you to the voice channel. Please check my permissions.", ephemeral=True)
-                        break
-                    except discord.DiscordServerError:
-                        await asyncio.sleep(1 + attempt)
-                    except discord.HTTPException:
-                        break
+                await interaction.followup.send("I couldn't move you to the voice channel.", ephemeral=True)
 
         await self.update_embed(interaction)
 
@@ -2757,22 +2783,41 @@ class LobbyView(discord.ui.View):
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user not in self.players:
             return await interaction.response.send_message("You are not in this lobby.", ephemeral=True)
-        
         if interaction.user == self.author:
             return await interaction.response.send_message("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
 
+        await interaction.response.defer()
         self.players.remove(interaction.user)
+        if interaction.user.voice and interaction.user.voice.channel == self.vc:
+            try:
+                await interaction.user.move_to(None, reason="Left the lobby")
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.followup.send("I couldn't remove you from the VC. Please disconnect manually.", ephemeral=True)
+
         await self.update_embed(interaction)
+
+    async def start_early_callback(self, interaction: discord.Interaction):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("Only the lobby creator can start the match early.", ephemeral=True)
+        if len(self.players) <= 1:
+            return await interaction.response.send_message("You need at least one other player to start early.", ephemeral=True)
+        
+        await interaction.response.defer()
+        await self.start_match(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.author:
             return await interaction.response.send_message("Only the lobby creator can cancel.", ephemeral=True)
 
-        await self.vc.delete(reason="Lobby cancelled by host.")
+        await interaction.response.defer()
+        try:
+            await self.vc.delete(reason="Lobby cancelled by host.")
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.followup.send("Failed to delete the voice channel. It might have been deleted already.", ephemeral=True)
 
-        for child in self.children:
-            child.disabled = True
+        for item in self.children:
+            item.disabled = True
         
         embed = discord.Embed(title="Lobby Cancelled", description="This lobby has been cancelled by the creator.", color=0xe74c3c)
         await interaction.message.edit(embed=embed, view=self)
