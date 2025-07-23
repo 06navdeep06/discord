@@ -3744,6 +3744,8 @@ def load_all_data() -> None:
         
         logger.info("All data loaded successfully")
     except Exception as e:
+        pass  # Add a pass statement or appropriate error handling here
+
 @bot.command(name="setmatchchannel")
 @commands.has_permissions(administrator=True)
 @bot.command(name="setmatchchannel")
