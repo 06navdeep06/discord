@@ -4098,8 +4098,25 @@ async def play(ctx, *, url: str):
                 await play_next(ctx)
             return
         except Exception as e:
-            await ctx.send(f"❌ Spotify error: {e}")
+            logger.error(f"Spotify error: {e}")
+            await ctx.send(f"❌ An error occurred with Spotify: {e}")
             return
+    # --- YouTube/General URL/Search support ---
+    try:
+        await ctx.send(f"🔎 Searching for `{url}`...")
+        source = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+        if source is None:
+            await ctx.send(f"❌ Could not find or process `{url}`. Please try a different URL or search term.")
+            return
+        track_info = {'url': url, 'title': source.title, 'requester': ctx.author.display_name}
+        music_queues[guild_id].append(track_info)
+        await ctx.send(f"🎵 Added **{source.title}** to queue!")
+        if not vc.is_playing():
+            await play_next(ctx)
+    except Exception as e:
+        logger.error(f"Error playing song: {e}")
+        await ctx.send(f"❌ An error occurred while trying to play: {e}")
+
     # --- End Spotify support ---
     # Add to queue (YouTube or search)
     music_queues[guild_id].append({'url': url, 'requester': ctx.author.display_name})
