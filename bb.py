@@ -573,9 +573,7 @@ async def on_ready():
         logger.info(f"✅ Logged in as {bot.user.name}")
     
     # Add persistent views
-    # This view is now dynamic per-user, so we don't register it globally on startup.
-    # Instead, the !setassignroles command creates the initial view.
-    # The view then re-creates itself on each interaction.
+    bot.add_view(RoleButtonView()) # Add the persistent view for game roles
     
     # Start scheduled tasks
     daily_role_reset.start()
@@ -1029,6 +1027,55 @@ async def auto_moderate(message: discord.Message):
 
 
 @bot.event
+@bot.command(name="set_personality")
+@commands.has_permissions(administrator=True)
+async def set_personality(ctx, *, personality: str):
+    """Overwrites the AI's current personality with a new one."""
+    if db is None:
+        await ctx.send("Database is not connected. Cannot set personality.")
+        return
+    set_guild_setting(ctx.guild.id, "system_prompt", personality)
+    await ctx.send(f'✅ AI personality has been set to: "{personality}"')
+
+@bot.command(name="add_personality")
+@commands.has_permissions(administrator=True)
+async def add_personality(ctx, *, trait: str):
+    """Adds a new trait to the AI's existing personality."""
+    if db is None:
+        await ctx.send("Database is not connected. Cannot add personality trait.")
+        return
+    
+    current_personality = get_system_prompt(ctx.guild.id)
+    # If it's the default prompt, start fresh rather than appending to it
+    if current_personality == DEFAULT_SYSTEM_PROMPT:
+        current_personality = ""
+
+    new_personality = (current_personality + " " + trait).strip()
+    set_guild_setting(ctx.guild.id, "system_prompt", new_personality)
+    await ctx.send(f'✅ New trait added! The personality is now: "{new_personality}"')
+
+@bot.command(name="view_personality")
+async def view_personality(ctx):
+    """Displays the AI's current personality for the server."""
+    if db is None:
+        await ctx.send("Database is not connected. Cannot view personality.")
+        return
+    current_personality = get_system_prompt(ctx.guild.id)
+    await ctx.send(f"""**Current AI Personality:**
+```
+{current_personality}
+```""")
+
+@bot.command(name="reset_personality")
+@commands.has_permissions(administrator=True)
+async def reset_personality(ctx):
+    """Resets the AI's personality to its default settings."""
+    if db is None:
+        await ctx.send("Database is not connected. Cannot reset personality.")
+        return
+    set_guild_setting(ctx.guild.id, "system_prompt", DEFAULT_SYSTEM_PROMPT)
+    await ctx.send("✅ AI personality has been reset to the default.")
+
 async def on_message(message):
     try:
         # Safe channel name for logging
