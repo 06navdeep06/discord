@@ -72,6 +72,7 @@ if spotipy and SpotifyClientCredentials:
 else:
     sp = None
 
+pending_matches = {}  # {guild_id: {message_id: author_id}}
 # --- Per-Guild (Server) Settings Helper Functions ---
 def get_guild_settings(guild_id):
     """Fetch settings for a specific Discord server (guild) from the database."""
@@ -536,6 +537,30 @@ async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = No
         logger.error(f"Llama 4 API exception: {e}")
         return None
 
+@bot.command(name="miku")
+async def miku(ctx, *, prompt: str):
+    """Get an AI response from Miku."""
+    async with ctx.typing():
+        try:
+            history = await get_recent_channel_history(ctx.channel, bot.user, ctx.message, limit=10)
+            system_prompt_for_guild = get_system_prompt_with_timezone_and_duration(ctx.guild.id)
+            ai_response = await fetch_llama4_response(prompt, user=ctx.author, history=history, system_prompt=system_prompt_for_guild)
+            
+            if ai_response and isinstance(ai_response, str):
+                if not hasattr(bot, '_recent_endings'):
+                    bot._recent_endings = []
+                recent_endings = bot._recent_endings[-3:]
+                processed = postprocess_response(ai_response, recent_endings)
+                if processed:
+                    last_words = processed.split()[-5:]
+                    bot._recent_endings.append(" ".join(last_words))
+                await ctx.reply(processed)
+            else:
+                await ctx.reply("Sorry, I couldn't process that. Please try again.")
+        except Exception as e:
+            logger.error(f"Error in !miku command: {e}")
+            logger.error(f"Miku command traceback: {traceback.format_exc()}")
+            await ctx.reply("❌ An unexpected error occurred while processing your command.")
 @bot.event
 async def on_ready():
     if bot.user:
@@ -966,7 +991,7 @@ async def auto_moderate(message: discord.Message):
                 return
         # Banned words check
         content_lower = content.lower()
-        for word in AUTO_MODERATION["banned_words"]:
+        for word in AUTO_MODERATION.get("banned_words", []):
             if word in content_lower:
                 await message.delete()
                 await message.channel.send(f"🚫 {message.author.mention}, that word is not allowed!")
@@ -2161,26 +2186,32 @@ async def bot_info(ctx):
     
     # --- Categorized Command List ---
     categories = {
+        "🤖 AI": [
+            "miku"
+        ],
+        "🎵 Music": [
+            "play", "join", "leave", "skip", "queue", "np", "stop", "volume", "pause", "resume"
+        ],
         "🛡️ Moderation": [
-            "kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings", "warnings", "clearwarnings"
-        ],
-        "📊 Information": [
-            "serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar", "stats", "vcstats", "voiceactivity", "servertime"
-        ],
-        "🎮 Fun": [
-            "poll", "8ball", "coinflip", "dice"
-        ],
-        "⏰ Utility": [
-            "remind", "theme"
-        ],
-        "🎙️ Voice": [
-            "voiceactivity", "vcstats", "afk"
-        ],
+             "kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings", "warnings", "clearwarnings"
+         ],
+         "📊 Information": [
+             "serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar", "stats", "vcstats", "voiceactivity", "servertime"
+         ],
+         "🎮 Fun": [
+             "poll", "8ball", "coinflip", "dice", "match"
+         ],
+         "⏰ Utility": [
+             "remind", "theme"
+         ],
+         "🎙️ Voice": [
+             "voiceactivity", "vcstats", "afk"
+         ],
         "📨 DM System": [
             "dm", "dmclose", "dmstatus", "dmhelp"
         ],
         "🔧 Admin": [
-            "status", "cleanup", "setwelcome", "setmodlog", "setdmcategory", "setafk", "setaichannel", "settimezone", "setpersonality"
+            "status", "cleanup", "setwelcome", "setmodlog", "setdmcategory", "setafk", "setaichannel", "settimezone", "setpersonality", "addpersonality", "viewpersonality", "resetpersonality"
         ],
         "📝 Help": [
             "helpme", "invite", "support"
@@ -2523,6 +2554,161 @@ async def roll_dice(ctx, number: int = 6):
     
     await ctx.send(embed=embed)
 
+class MatchView(discord.ui.View):
+    def __init__(self, author):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.author = author
+        self.matched = False
+
+    @discord.ui.button(label="Accept Match", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id == self.author.id:
+            await interaction.response.send_message("You can't match with yourself!", ephemeral=True)
+            return
+
+        if self.matched:
+            await interaction.response.send_message("This match has already been accepted.", ephemeral=True)
+            return
+
+        self.matched = True
+        button.disabled = True
+        button.label = "Matched"
+        await interaction.message.edit(view=self)
+
+        guild = interaction.guild
+        user1 = self.author
+        user2 = interaction.user
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(connect=False),
+            user1: discord.PermissionOverwrite(connect=True, view_channel=True),
+            user2: discord.PermissionOverwrite(connect=True, view_channel=True),
+            guild.me: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
+        }
+        
+        category = discord.utils.get(guild.categories, name="Matches")
+        if not category:
+            category = await guild.create_category("Matches")
+
+        try:
+            vc = await guild.create_voice_channel(f"💞 {user1.display_name} & {user2.display_name}", overwrites=overwrites, category=category)
+            invite = await vc.create_invite(max_uses=2)
+
+            await user1.send(f"You've been matched with {user2.mention}! Click here to join the voice channel: {invite.url}")
+            await user2.send(f"You've matched with {user1.mention}! Click here to join the voice channel: {invite.url}")
+            await interaction.response.send_message(f"{user2.mention} has accepted the match with {user1.mention}! A private voice channel has been created.", ephemeral=False)
+
+        except Exception as e:
+            logger.error(f"Error creating match channel: {e}")
+            await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
+
+
+@bot.command(name="match")
+async def match(ctx):
+    """Look for a match to have a voice chat with."""
+    settings = get_guild_settings(ctx.guild.id)
+    match_channel_id = settings.get("match_channel_id")
+
+    if not match_channel_id or ctx.channel.id != match_channel_id:
+        return await ctx.send(f"This command can only be used in the designated match channel.")
+
+    embed = discord.Embed(
+        title="💞 Looking for a Match!",
+        description=f"{ctx.author.mention} is looking for someone to talk to. Click the button below to accept the match!",
+        color=0xff69b4
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text="Match will expire in 1 hour.")
+    
+    view = MatchView(ctx.author)
+    await ctx.send(embed=embed, view=view)
+
+
+GAME_LIMITS = {
+    "valorant": 5,
+    "peak": 2,
+    "repo": 4
+}
+
+@bot.command(name="match")
+async def match(ctx, game: str):
+    """Looks for a match for the specified game.
+    Usage: !match game=valorant
+    """
+    settings = get_guild_settings(ctx.guild.id)
+    match_channel_id = settings.get("match_channel_id")
+
+    if not match_channel_id or ctx.channel.id != match_channel_id:
+        return await ctx.send(f"This command can only be used in the designated match channel.")
+
+    if game.lower() not in GAME_LIMITS:
+        return await ctx.send(f"❌ Invalid game. Supported games: {', '.join(GAME_LIMITS.keys())}")
+
+    embed = discord.Embed(
+        title=f"💞 Looking for a {game.capitalize()} Match!",
+        description=f"{ctx.author.mention} is looking for someone to play {game.capitalize()} with. Click the button below to accept the match!",
+        color=0xff69b4
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text="Match will expire in 1 hour.")
+    
+    view = MatchView(ctx.author, game.lower())
+    await ctx.send(embed=embed, view=view)
+
+class MatchView(discord.ui.View):
+    def __init__(self, author, game):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.author = author
+        self.game = game
+        self.matched = False
+
+    @discord.ui.button(label="Accept Match", style=discord.ButtonStyle.success, emoji="✅")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id == self.author.id:
+            await interaction.response.send_message("You can't match with yourself!", ephemeral=True)
+            return
+
+        if self.matched:
+            await interaction.response.send_message("This match has already been accepted.", ephemeral=True)
+            return
+
+        self.matched = True
+        button.disabled = True
+        button.label = "Matched"
+        await interaction.message.edit(view=self)
+
+        guild = interaction.guild
+        user1 = self.author
+        user2 = interaction.user
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(connect=False),
+            user1: discord.PermissionOverwrite(connect=True, view_channel=True),
+            user2: discord.PermissionOverwrite(connect=True, view_channel=True),
+            guild.me: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
+        }
+        
+        category = discord.utils.get(guild.categories, name="Matches")
+        if not category:
+            category = await guild.create_category("Matches")
+
+        try:
+            vc = await guild.create_voice_channel(f"💞 {user1.display_name} & {user2.display_name} ({self.game})", overwrites=overwrites, category=category)
+            
+            # Limit the voice channel to the maximum number of players for the specified game
+            limit = GAME_LIMITS.get(self.game, None)
+            if limit:
+                await vc.edit(user_limit=limit)
+
+            invite = await vc.create_invite(max_uses=2)
+
+            await user1.send(f"You've been matched with {user2.mention} for {self.game.capitalize()}! Click here to join the voice channel: {invite.url}")
+            await user2.send(f"You've matched with {user1.mention} for {self.game.capitalize()}! Click here to join the voice channel: {invite.url}")
+            await interaction.response.send_message(f"{user2.mention} has accepted the match with {user1.mention} for {self.game.capitalize()}! A private voice channel has been created.", ephemeral=False)
+
+        except Exception as e:
+            logger.error(f"Error creating match channel: {e}")
+            await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
 
 @bot.command(name="helpme")
 async def help_command(ctx, command_name: Optional[str] = None):
@@ -2558,14 +2744,15 @@ async def help_command(ctx, command_name: Optional[str] = None):
         
         # Categorize commands
         categories = {
-            "🎵 Music": ["play", "join", "leave"],
+            "🤖 AI": ["miku"],
+            "🎵 Music": ["play", "join", "leave", "skip", "queue", "np", "stop", "volume", "pause", "resume"],
             "🛡️ Moderation": ["kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings"],
             "📊 Information": ["serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar"],
-            "🎮 Fun": ["poll", "8ball", "coinflip", "dice"],
+            "🎮 Fun": ["poll", "8ball", "coinflip", "dice", "match"],
             "⏰ Utility": ["remind", "theme"],
             "🎙️ Voice": ["voiceactivity", "vcstats", "afk"],
             "📨 DM System": ["dm", "dmclose", "dmstatus", "dmhelp"],
-            "🔧 Admin": ["status", "cleanup", "warnings", "clearwarnings", "setpersonality"]
+            "🔧 Admin": ["status", "cleanup", "warnings", "clearwarnings", "setpersonality", "addpersonality", "viewpersonality", "resetpersonality"]
         }
         
         for category, commands in categories.items():
@@ -3557,7 +3744,12 @@ def load_all_data() -> None:
         
         logger.info("All data loaded successfully")
     except Exception as e:
-        logger.error(f"Error loading data: {e}")
+@bot.command(name="setmatchchannel")
+@commands.has_permissions(administrator=True)
+@bot.command(name="setmatchchannel")
+async def set_match_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "match_channel_id", channel.id)
+    await ctx.send(f"✅ Matchmaking channel set to {channel.mention}")
 
 # --- Admin Setup Commands for Template Voice Channels ---
 @bot.command(name="setduochannel")
@@ -3628,6 +3820,12 @@ async def set_ai_channel(ctx, channel: discord.TextChannel):
     set_guild_setting(ctx.guild.id, "ai_channel_id", channel.id)
     await ctx.send(f"✅ AI/Miku channel set to {channel.mention}")
 
+@bot.command(name="setmatchchannel")
+@commands.has_permissions(administrator=True)
+async def set_match_channel(ctx, channel: discord.TextChannel):
+    set_guild_setting(ctx.guild.id, "match_channel_id", channel.id)
+    await ctx.send(f"✅ Matchmaking channel set to {channel.mention}")
+
 @bot.command(name="settimezone")
 @commands.has_permissions(administrator=True)
 async def set_timezone(ctx, *, country_or_tz: Optional[str] = None):
@@ -3669,23 +3867,64 @@ async def server_time(ctx):
 @bot.command(name="setpersonality")
 @commands.has_permissions(administrator=True)
 async def set_personality(ctx, *, prompt: str):
-    """Sets a custom AI personality for the server. (Admin only)"""
+    """Overwrites the current AI personality for the server. (Admin only)"""
     if len(prompt) > 1500:
         await ctx.send("❌ Personality prompt is too long! Maximum 1500 characters.")
         return
     set_guild_setting(ctx.guild.id, "system_prompt", prompt)
     embed = discord.Embed(
-        title="🤖 AI Personality Updated",
-        description="The bot's personality for this server has been updated.",
+        title="🤖 AI Personality Overwritten",
+        description="The bot's personality for this server has been completely replaced.",
         color=0x00ff00
     )
     embed.add_field(name="New Personality Prompt", value=prompt)
     await ctx.send(embed=embed)
 
+@bot.command(name="addpersonality")
+@commands.has_permissions(administrator=True)
+async def add_personality(ctx, *, prompt: str):
+    """Adds a new trait to the current AI personality. (Admin only)"""
+    current_prompt = get_system_prompt(ctx.guild.id)
+    if len(current_prompt) + len(prompt) > 1500:
+        await ctx.send("❌ Adding this trait would exceed the 1500 character limit.")
+        return
+    new_prompt = current_prompt + " " + prompt
+    set_guild_setting(ctx.guild.id, "system_prompt", new_prompt)
+    embed = discord.Embed(
+        title="🤖 AI Personality Updated",
+        description="A new trait has been added to the bot's personality.",
+        color=0x00ff00
+    )
+    embed.add_field(name="Updated Personality Prompt", value=new_prompt)
+    await ctx.send(embed=embed)
+@bot.command(name="viewpersonality")
+@commands.has_permissions(administrator=True)
+async def view_personality(ctx):
+    """Displays the current AI personality for the server. (Admin only)"""
+    current_prompt = get_system_prompt(ctx.guild.id)
+    embed = discord.Embed(
+        title="🤖 Current AI Personality",
+        description="This is the current personality prompt for the bot on this server.",
+        color=0x00ff00
+    )
+    embed.add_field(name="Personality Prompt", value=current_prompt)
+    await ctx.send(embed=embed)
 
 # --- DM System ---
 # Track active DM conversations
 active_dm_conversations = {}  # {user_id: {"channel_id": channel_id, "moderator_id": moderator_id, "start_time": timestamp}}
+@bot.command(name="resetpersonality")
+@commands.has_permissions(administrator=True)
+async def reset_personality(ctx):
+    """Resets the AI personality to the default. (Admin only)"""
+    set_guild_setting(ctx.guild.id, "system_prompt", DEFAULT_SYSTEM_PROMPT)
+    embed = discord.Embed(
+        title="🤖 AI Personality Reset",
+        description="The bot's personality has been reset to the default.",
+        color=0x00ff00
+    )
+    embed.add_field(name="Default Personality Prompt", value=DEFAULT_SYSTEM_PROMPT)
+    await ctx.send(embed=embed)
 
 # --- Music System ---
 music_queues = {}  # {guild_id: [track_dict, ...]}
@@ -3781,16 +4020,18 @@ async def play_next(ctx):
     queue = music_queues.get(guild_id, [])
     if not queue:
         now_playing.pop(guild_id, None)
-        await ctx.voice_client.disconnect()
         return
     track = queue.pop(0)
     now_playing[guild_id] = track
     source = await YTDLSource.from_url(track['url'], loop=bot.loop, stream=True)
     if source is None:
         logger.error(f"Failed to get YTDLSource for {track['url']}. Skipping to next song.")
-        await ctx.send(f"❌ Could not play **{track.get('url', 'unknown song')}**. Skipping to next song.")
-        bot.loop.create_task(play_next(ctx)) # Try to play the next song
+        await ctx.send(f"❌ Could not play **{track.get('title', 'unknown song')}**. Skipping to next song.")
+        bot.loop.create_task(play_next(ctx))
         return
+    
+    now_playing[guild_id]['title'] = source.title
+
     ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
     await ctx.send(f"🎶 Now playing: **{source.title}**")
 
@@ -3802,32 +4043,33 @@ async def play(ctx, *, url: str):
     guild_id = ctx.guild.id
     if guild_id not in music_queues:
         music_queues[guild_id] = []
-    # --- Spotify support ---
+    
     if sp and ("open.spotify.com" in url or url.strip().startswith("spotify:")):
         try:
             await ctx.send("🔎 Fetching Spotify tracks...")
+            tracks_to_add = []
             if "/track/" in url:
                 track = sp.track(url)
                 query = f"{track['name']} {track['artists'][0]['name']} audio"
-                music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
                 await ctx.send(f"🎵 Added **{track['name']}** by **{track['artists'][0]['name']}** to queue!")
             elif "/playlist/" in url:
                 playlist = sp.playlist_tracks(url)
                 for item in playlist['items']:
                     track = item['track']
                     query = f"{track['name']} {track['artists'][0]['name']} audio"
-                    music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                    tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
                 await ctx.send(f"🎵 Added {len(playlist['items'])} tracks from Spotify playlist to queue!")
             elif "/album/" in url:
                 album = sp.album_tracks(url)
                 for track in album['items']:
                     query = f"{track['name']} {track['artists'][0]['name']} audio"
-                    music_queues[guild_id].append({'url': query, 'requester': ctx.author.display_name})
+                    tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
                 await ctx.send(f"🎵 Added {len(album['items'])} tracks from Spotify album to queue!")
             else:
-                await ctx.send("❌ Unsupported Spotify link.")
-                return
-            # If nothing is playing, start
+                return await ctx.send("❌ Unsupported Spotify link.")
+
+            music_queues[guild_id].extend(tracks_to_add)
             if not vc.is_playing():
                 await play_next(ctx)
             return
@@ -3835,31 +4077,111 @@ async def play(ctx, *, url: str):
             logger.error(f"Spotify error: {e}")
             await ctx.send(f"❌ An error occurred with Spotify: {e}")
             return
-    # --- YouTube/General URL/Search support ---
+
     try:
         await ctx.send(f"🔎 Searching for `{url}`...")
-        source = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
-        if source is None:
-            await ctx.send(f"❌ Could not find or process `{url}`. Please try a different URL or search term.")
-            return
-        track_info = {'url': url, 'title': source.title, 'requester': ctx.author.display_name}
+        ytdl = yt_dlp.YoutubeDL({'format': 'bestaudio', 'noplaylist':'True', 'quiet': True, 'default_search': 'auto'})
+        info = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        
+        if 'entries' in info:
+            info = info['entries'][0]
+
+        track_info = {'url': info['webpage_url'], 'title': info['title'], 'requester': ctx.author.display_name}
         music_queues[guild_id].append(track_info)
-        await ctx.send(f"🎵 Added **{source.title}** to queue!")
+        await ctx.send(f"🎵 Added **{info['title']}** to queue!")
         if not vc.is_playing():
             await play_next(ctx)
     except Exception as e:
         logger.error(f"Error playing song: {e}")
         await ctx.send(f"❌ An error occurred while trying to play: {e}")
 
-    # --- End Spotify support ---
-    # Add to queue (YouTube or search)
-    music_queues[guild_id].append({'url': url, 'requester': ctx.author.display_name})
-    await ctx.send(f"🔎 Searching for: {url}")
-    # If nothing is playing, start
-    if not vc.is_playing():
-        await play_next(ctx)
+@bot.command(name="skip", help="Skip the current song.", usage="")
+async def skip(ctx):
+    vc = ctx.voice_client
+    if not vc or not vc.is_playing():
+        return await ctx.send("❌ I am not playing anything.")
+    vc.stop()
+    await ctx.send("⏭️ Skipped song.")
+
+@bot.command(name="queue", help="Show the music queue.", usage="")
+async def queue(ctx):
+    guild_id = ctx.guild.id
+    queue = music_queues.get(guild_id, [])
+    
+    embed = discord.Embed(title="🎵 Music Queue", color=0x3498db)
+    
+    currently_playing = now_playing.get(guild_id)
+    if currently_playing:
+        embed.add_field(name="🎶 Now Playing", value=f"**{currently_playing['title']}**\nRequested by: {currently_playing['requester']}", inline=False)
+
+    if not queue:
+        if not currently_playing:
+            embed.description = "The queue is empty."
     else:
-        await ctx.send(f" Added to queue!")
+        queue_text = ""
+        for i, track in enumerate(queue[:10]):
+            queue_text += f"{i+1}. **{track['title']}** (Requested by: {track['requester']})\n"
+        embed.add_field(name="📜 Up Next", value=queue_text, inline=False)
+    
+    if len(queue) > 10:
+        embed.set_footer(text=f"And {len(queue) - 10} more...")
+        
+    await ctx.send(embed=embed)
+
+@bot.command(name="np", help="Show the currently playing song.", usage="")
+async def now_playing_command(ctx):
+    guild_id = ctx.guild.id
+    track = now_playing.get(guild_id)
+    if not track:
+        return await ctx.send("🎵 Nothing is playing.")
+        
+    embed = discord.Embed(title="🎶 Now Playing", description=track['title'], color=0x3498db)
+    embed.add_field(name="Requested by", value=track['requester'])
+    await ctx.send(embed=embed)
+
+@bot.command(name="stop", help="Stop the music and clear the queue.", usage="")
+async def stop(ctx):
+    guild_id = ctx.guild.id
+    vc = ctx.voice_client
+    if not vc:
+        return await ctx.send("❌ I am not in a voice channel.")
+    
+    if guild_id in music_queues:
+        music_queues[guild_id] = []
+    now_playing.pop(guild_id, None)
+    if vc.is_playing():
+        vc.stop()
+    await ctx.send("⏹️ Stopped the music and cleared the queue.")
+
+@bot.command(name="volume", help="Change the music volume.", usage="<1-100>")
+async def volume(ctx, volume: int):
+    vc = ctx.voice_client
+    if not vc or not vc.source:
+        return await ctx.send("❌ I am not playing anything.")
+    
+    if not 0 <= volume <= 100:
+        return await ctx.send("❌ Volume must be between 0 and 100.")
+        
+    vc.source.volume = volume / 100
+    await ctx.send(f"🔊 Volume set to {volume}%")
+
+@bot.command(name="pause", help="Pause the music.", usage="")
+async def pause(ctx):
+    vc = ctx.voice_client
+    if vc and vc.is_playing():
+        vc.pause()
+        await ctx.send("⏸️ Paused the music.")
+    else:
+        await ctx.send("❌ I am not playing anything.")
+
+@bot.command(name="resume", help="Resume the music.", usage="")
+async def resume(ctx):
+    vc = ctx.voice_client
+    if vc and vc.is_paused():
+        vc.resume()
+        await ctx.send("▶️ Resumed the music.")
+    else:
+        await ctx.send("❌ The music is not paused.")
 
 async def reset_voice_activity_weekly() -> None:
     while True:
