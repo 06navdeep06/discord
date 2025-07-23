@@ -2630,85 +2630,124 @@ GAME_LIMITS = {
     "repo": 4
 }
 
+class LobbyView(discord.ui.View):
+    def __init__(self, author, game):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.author = author
+        self.game = game.lower()
+        self.limit = GAME_LIMITS.get(self.game, 2)
+        self.players = [author]
+        self.message = None
+
+    async def update_embed(self, interaction: discord.Interaction):
+        player_mentions = "\n".join([p.mention for p in self.players])
+        embed = discord.Embed(
+            title=f"✨ {self.game.capitalize()} Lobby ✨",
+            description=f"**Players ({len(self.players)}/{self.limit})**:\n{player_mentions}",
+            color=0x2ecc71
+        )
+        embed.set_footer(text=f"Lobby created by {self.author.display_name}")
+        await interaction.message.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, emoji="✅")
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user in self.players:
+            return await interaction.response.send_message("You are already in the lobby.", ephemeral=True)
+        
+        if len(self.players) >= self.limit:
+            return await interaction.response.send_message("This lobby is full.", ephemeral=True)
+
+        self.players.append(interaction.user)
+        await self.update_embed(interaction)
+
+        if len(self.players) == self.limit:
+            await self.start_match(interaction)
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user not in self.players:
+            return await interaction.response.send_message("You are not in this lobby.", ephemeral=True)
+        
+        if interaction.user == self.author:
+            return await interaction.response.send_message("The lobby creator cannot leave.", ephemeral=True)
+
+        self.players.remove(interaction.user)
+        await self.update_embed(interaction)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author:
+            return await interaction.response.send_message("Only the lobby creator can cancel.", ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+        
+        embed = discord.Embed(title="Lobby Cancelled", description="This lobby has been cancelled by the creator.", color=0xe74c3c)
+        await interaction.message.edit(embed=embed, view=self)
+        self.stop()
+
+    async def start_match(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        category = discord.utils.get(guild.categories, name="Matches")
+        if not category:
+            category = await guild.create_category("Matches")
+
+        overwrites = {guild.default_role: discord.PermissionOverwrite(connect=False)}
+        for player in self.players:
+            overwrites[player] = discord.PermissionOverwrite(connect=True, view_channel=True)
+        overwrites[guild.me] = discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
+
+        try:
+            vc = await guild.create_voice_channel(
+                f"✨ {self.game.capitalize()} Match", 
+                overwrites=overwrites, 
+                category=category,
+                user_limit=self.limit
+            )
+
+            for child in self.children:
+                child.disabled = True
+            
+            embed = discord.Embed(title="Match Starting!", description=f"Voice channel created: {vc.mention}", color=0x3498db)
+            await interaction.message.edit(embed=embed, view=self)
+
+            for player in self.players:
+                try:
+                    await player.move_to(vc)
+                except discord.HTTPException:
+                    pass # User might not be in a VC
+            
+            self.stop()
+
+        except Exception as e:
+            logger.error(f"Error starting match: {e}")
+            await interaction.followup.send("Failed to start the match.", ephemeral=True)
+
 @bot.command(name="match")
 async def match(ctx, game: str):
-    """Looks for a match for the specified game.
-    Usage: !match game=valorant
-    """
+    """Creates a matchmaking lobby for a specific game."""
     settings = get_guild_settings(ctx.guild.id)
     match_channel_id = settings.get("match_channel_id")
 
     if not match_channel_id or ctx.channel.id != match_channel_id:
         return await ctx.send(f"This command can only be used in the designated match channel.")
 
-    if game.lower() not in GAME_LIMITS:
+    game_name = game.lower()
+    if game_name not in GAME_LIMITS:
         return await ctx.send(f"❌ Invalid game. Supported games: {', '.join(GAME_LIMITS.keys())}")
 
-    embed = discord.Embed(
-        title=f"💞 Looking for a {game.capitalize()} Match!",
-        description=f"{ctx.author.mention} is looking for someone to play {game.capitalize()} with. Click the button below to accept the match!",
-        color=0xff69b4
-    )
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.set_footer(text="Match will expire in 1 hour.")
+    view = LobbyView(ctx.author, game_name)
     
-    view = MatchView(ctx.author, game.lower())
-    await ctx.send(embed=embed, view=view)
-
-class MatchView(discord.ui.View):
-    def __init__(self, author, game):
-        super().__init__(timeout=3600)  # 1 hour timeout
-        self.author = author
-        self.game = game
-        self.matched = False
-
-    @discord.ui.button(label="Accept Match", style=discord.ButtonStyle.success, emoji="✅")
-    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id == self.author.id:
-            await interaction.response.send_message("You can't match with yourself!", ephemeral=True)
-            return
-
-        if self.matched:
-            await interaction.response.send_message("This match has already been accepted.", ephemeral=True)
-            return
-
-        self.matched = True
-        button.disabled = True
-        button.label = "Matched"
-        await interaction.message.edit(view=self)
-
-        guild = interaction.guild
-        user1 = self.author
-        user2 = interaction.user
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(connect=False),
-            user1: discord.PermissionOverwrite(connect=True, view_channel=True),
-            user2: discord.PermissionOverwrite(connect=True, view_channel=True),
-            guild.me: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
-        }
-        
-        category = discord.utils.get(guild.categories, name="Matches")
-        if not category:
-            category = await guild.create_category("Matches")
-
-        try:
-            vc = await guild.create_voice_channel(f"💞 {user1.display_name} & {user2.display_name} ({self.game})", overwrites=overwrites, category=category)
-            
-            # Limit the voice channel to the maximum number of players for the specified game
-            limit = GAME_LIMITS.get(self.game, None)
-            if limit:
-                await vc.edit(user_limit=limit)
-
-            invite = await vc.create_invite(max_uses=2)
-
-            await user1.send(f"You've been matched with {user2.mention} for {self.game.capitalize()}! Click here to join the voice channel: {invite.url}")
-            await user2.send(f"You've matched with {user1.mention} for {self.game.capitalize()}! Click here to join the voice channel: {invite.url}")
-            await interaction.response.send_message(f"{user2.mention} has accepted the match with {user1.mention} for {self.game.capitalize()}! A private voice channel has been created.", ephemeral=False)
-
-        except Exception as e:
-            logger.error(f"Error creating match channel: {e}")
-            await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
+    player_mentions = "\n".join([p.mention for p in view.players])
+    embed = discord.Embed(
+        title=f"✨ {game_name.capitalize()} Lobby ✨",
+        description=f"**Players ({len(view.players)}/{view.limit})**:\n{player_mentions}",
+        color=0x2ecc71
+    )
+    embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
+    
+    message = await ctx.send(embed=embed, view=view)
+    view.message = message
 
 @bot.command(name="helpme")
 async def help_command(ctx, command_name: Optional[str] = None):
@@ -3744,8 +3783,6 @@ def load_all_data() -> None:
         
         logger.info("All data loaded successfully")
     except Exception as e:
-        pass  # Add a pass statement or appropriate error handling here
-
 @bot.command(name="setmatchchannel")
 @commands.has_permissions(administrator=True)
 @bot.command(name="setmatchchannel")
