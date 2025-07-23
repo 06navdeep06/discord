@@ -1074,24 +1074,31 @@ async def reset_personality(ctx):
     set_guild_setting(ctx.guild.id, "system_prompt", DEFAULT_SYSTEM_PROMPT)
     await ctx.send("✅ AI personality has been reset to the default.")
 
+@bot.event
 async def on_message(message):
-    if message.author == bot.user:
-        return
+    try:
+        # Safe channel name for logging
+        channel_info = getattr(message.channel, 'name', None)
+        if not channel_info:
+            channel_info = f"{type(message.channel).__name__} (ID: {getattr(message.channel, 'id', 'N/A')})"
+        logger.info(f"Processing message from {message.author.display_name} in {channel_info}")
 
-    if isinstance(message.channel, discord.DMChannel):
-        await handle_dm_reply(message)
-        return
+        if message.author == bot.user:
+            return  # Ignore messages from the bot itself
 
-    # Get guild-specific settings
-    settings = get_guild_settings(message.guild.id)
-    ai_channel_id = settings.get("ai_channel_id")
+        if isinstance(message.channel, discord.DMChannel):
+            await handle_dm_reply(message)
+            return
 
-    # AI response logic
-    is_ai_channel = ai_channel_id and message.channel.id == ai_channel_id
-    is_mention = bot.user.mentioned_in(message) and not message.mention_everyone
+        # Get guild-specific settings
+        settings = get_guild_settings(message.guild.id)
+        ai_channel_id = settings.get("ai_channel_id")
 
-    if (is_ai_channel or is_mention) and not message.content.startswith('!'):
-        try:
+        # AI response logic
+        is_ai_channel = ai_channel_id and message.channel.id == ai_channel_id
+        is_mention = bot.user.mentioned_in(message) and not message.mention_everyone
+
+        if (is_ai_channel or is_mention) and not message.content.startswith('!'):
             history = await get_recent_channel_history(message.channel, bot.user, message, limit=20)
             system_prompt = get_system_prompt_with_timezone_and_duration(message.guild.id)
             ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt)
@@ -1099,23 +1106,47 @@ async def on_message(message):
                 await message.reply(ai_response)
             else:
                 await message.reply("Sorry, I couldn't generate a response.")
-        except Exception as e:
-            logger.error(f"Error during AI response generation: {e}")
-            await message.reply("An error occurred while trying to respond.")
-        return # Stop further processing if we handled it as an AI message
+            return
 
-    # Process commands and other logic if it wasn't an AI message
-    try:
-        await auto_moderate(message)
+        # Process commands
         await bot.process_commands(message)
-        # Keyword responses can go here if needed
+
+        # Auto-moderation and keyword responses
+        await auto_moderate(message)
+        
         message_lower = message.content.lower()
+        if 'deadshot' in message_lower:
+            response = "Oi rando, talai muji deadshot sanga love paryo ki kya ho? gay chakka randi berojgar"
+            gif_url = random.choice(MIKU_GIFS)
+            embed = discord.Embed(description=response, color=0xff1744)
+            embed.set_image(url=gif_url)
+            await message.reply(embed=embed)
+            return
+
+        if re.search(r'\boj\b', message_lower) or re.search(r'\bOJ\b', message.content):
+            response = "OJ chakka sanga kura na gar"
+            gif_url = random.choice(MIKU_GIFS)
+            embed = discord.Embed(description=response, color=0xff1744)
+            embed.set_image(url=gif_url)
+            await message.reply(embed=embed)
+            return
+
+        if 'rei' in message_lower:
+            response = "I love my darling @Rei. He's so much bigger than my black femboy <3. "
+            gif_url = random.choice(HREI_GIFS)
+            embed = discord.Embed(description=response, color=0xff1744)
+            embed.set_image(url=gif_url)
+            await message.reply(embed=embed)
+            return
+
         if 'peak' in message_lower and '?' in message_lower:
             await message.channel.send('https://discord.gg/peak')
         elif 'valorant' in message_lower and '?' in message_lower:
             await message.channel.send('https://discord.gg/valorant')
+
     except Exception as e:
-        logger.error(f"Error in post-AI message processing: {e}")
+        logger.error(f"Error in on_message: {e}")
+        logger.error(f"on_message traceback: {traceback.format_exc()}")
 
         # Check for specific keywords
         message_lower = message.content.lower()
