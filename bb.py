@@ -3783,9 +3783,10 @@ def load_all_data() -> None:
         
         logger.info("All data loaded successfully")
     except Exception as e:
+        logger.error(f"Error loading data on startup: {e}")
+
 @bot.command(name="setmatchchannel")
 @commands.has_permissions(administrator=True)
-@bot.command(name="setmatchchannel")
 async def set_match_channel(ctx, channel: discord.TextChannel):
     set_guild_setting(ctx.guild.id, "match_channel_id", channel.id)
     await ctx.send(f"✅ Matchmaking channel set to {channel.mention}")
