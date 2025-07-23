@@ -129,7 +129,6 @@ Set up the voice channels that Miku will use as templates for creating new ones:
 
 - `!remind <time> <message>`: Sets a reminder (e.g., `!remind 1h check on dinner`).
 - `!theme [theme_name]`: Sets a theme for your next created voice channel.
-- `!shape <personality>`: Changes the bot's AI personality for the channel (e.g., `!shape miku`).
 </details>
 
 <details>
@@ -139,13 +138,18 @@ Set up the voice channels that Miku will use as templates for creating new ones:
 - `!dmclose @user`: Closes an active DM conversation.
 - `!dmstatus`: Shows all active DM conversations.
 - `!dmhelp`: Provides detailed help for the DM system.
+- `!setpersonality <prompt>`: Sets a custom AI personality for the server.
 </details>
 
-## AI Personalities
+## Custom AI Personality
 
-You can change the bot's behavior in a channel by switching its personality with the `!shape` command.
-- **`miku`**: A sassy, vulgar, and unpredictable personality.
-- **`shapeinc`**: A friendly, helpful, and professional assistant.
+Admins can define a custom personality for the bot on their server using the `!setpersonality` command. This allows you to tailor the bot's voice and behavior to match your community's style.
+
+**Example:**
+```
+!setpersonality You are a witty and sarcastic assistant who loves to tell jokes.
+```
+The bot will then adopt this persona in its interactions. If no custom personality is set, it will use a friendly and helpful default.
 
 ## Data Persistence
 

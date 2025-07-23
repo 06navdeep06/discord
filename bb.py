@@ -463,169 +463,30 @@ server_stats = {
 user_activity = {}
 message_cooldowns = {}
 
-class MikuMemory:
-    def __init__(self, max_history=5):
-        self.user_history = defaultdict(lambda: deque(maxlen=max_history))
-
-    def add_message(self, user_id, message):
-        self.user_history[user_id].append((time.time(), message))
-
-    def get_recent(self, user_id):
-        return [msg for _, msg in self.user_history[user_id]]
-
-class MikuContext:
-    def __init__(self):
-        self.context_keywords = {
-            "greeting": ["hello", "hi", "hey", "namaste", "yo", "sup", "wassup", "good morning", "good night", "good evening", "greetings", "salam", "hola", "bonjour"],
-            "question": ["what", "how", "why", "when", "where", "who", "kasari", "kina", "kaha", "ko", "kun", "can you", "could you", "would you", "should I", "is it", "are you", "does anyone"],
-            "help": ["help", "maddat", "sahayog", "sikaunu", "guide", "assist", "support", "problem", "issue", "fix", "trouble", "how to", "solution", "question"],
-            "gaming": ["game", "gaming", "play", "khel", "pubg", "valorant", "csgo", "minecraft", "fortnite", "apex", "cod", "rank", "win", "lose", "match", "team", "carry", "gamer", "fps", "multiplayer"],
-            "food": ["food", "khana", "hungry", "eat", "bhat", "dal", "momo", "chowmein", "pizza", "burger", "snack", "lunch", "dinner", "breakfast", "cook", "recipe", "taste", "delicious", "yummy"],
-            "time": ["time", "samaya", "bela", "kati", "bajyo", "o'clock", "hour", "minute", "second", "late", "early", "soon", "now", "today", "tomorrow", "yesterday", "schedule", "reminder"],
-            "insult": ["stupid", "idiot", "dumb", "geda", "muji", "chutiya", "fool", "moron", "baka", "noob", "loser", "trash", "lame", "suck", "roast", "burn"],
-            "love": ["love", "maya", "prem", "like", "crush", "girlfriend", "boyfriend", "date", "romantic", "heart", "cute", "sweet", "bae", "gf", "bf", "relationship", "breakup"],
-            "tech": ["tech", "computer", "laptop", "pc", "phone", "android", "ios", "windows", "mac", "linux", "bug", "code", "python", "discord", "bot", "server", "wifi", "internet", "update", "software", "hardware", "app", "feature", "device", "gadget"],
-            # ... (other contexts as in your original code) ...
-        }
-        self.match_threshold = 1
-
-    def detect(self, message: str, recent_history: Optional[list] = None) -> str:
-        message_lower = message.lower()
-        best_context = "default"
-        best_score = 0
-        # Combine current message and recent history for context
-        all_text = [message_lower]
-        if recent_history:
-            all_text += [m.lower() for m in recent_history[-2:]]  # last 2 messages
-        combined = " ".join(all_text)
-        for context, keywords in self.context_keywords.items():
-            score = sum(1 for word in keywords if re.search(rf'\b{re.escape(word)}\b', combined))
-            if score > best_score:
-                best_score = score
-                best_context = context
-        if best_score >= self.match_threshold:
-            return best_context
-        return "default"
-
-class MikuResponder:
-    def __init__(self):
-        self.characters = {
-            "miku": {
-                "greeting": [
-                    "Yo! K garira? Server ma aayera chill gar!",
-                    "Namaste, aaja pani disturb garna aayis?",
-                    "Hello hello! Kura garna aayeko?",
-                    "Tero mukh dekhda ni server ko vibe bigriyo!",
-                    "Aaune bela ta thik cha, jaane bela kina ahile samma?",
-                    "Ke chahiyo muji?"
-                ],
-                "question": [
-                    "Ke sodheko? Tero dimag kharab cha ki k ho?",
-                    "Kina sodhchau? Boka jasto kura!", "Tero buddhi bhaye hunthyo!",
-                    "Sodhna paryo? Geda haruko chela!", "Ke bhaneko? Machikney geda!",
-                    "Sodhna matlab tero dimaag ma gobar bhareeko cha!"
-                ],
-                # ... (other responses as in your original code) ...
-                "default": [
-                    "Ke bhaneko muji? Kina disturb garchau?",
-                    "Geda jasto kura nagarr bhaneko!",
-                    "Tero dimag kharab cha ki k ho machikney?",
-                    "Machikney! Yaha bata bhaagr!", "Kati chutiya ho yaar!",
-                    "Sala randi ko choro!", "Gandu haru lai time nai chaina!",
-                    "Boka jasto kaam nagarr!", "Tero buddi cha ki chaina bhanr?",
-                    "Machikney bhaag yaha bata!", "Kati geda cha yaar!",
-                    "Tero mukh dekhda riis uthcha!", "Sala kukkur!", "Geda jasto nabol!",
-                    "Machha maarnu cha tero?", "Tero buddhi bhaye hunthyo!",
-                    "Randi ko choro kaam garr!", "Gandu haruko raaja!", "Boka ko puti!",
-                    "Tero dimaag ma gobar bhareeko cha!", "Lado khane!",
-                    "Chikni ko choro!", "Machikney geda!", "Randi ko ban!", "Sala bhalu!",
-                    "Tero ama ko puti!", "Geda haruko chela!", "Machha khane muji!",
-                    "Tero bau ko lado!", "Chutiya ko pariwar!", "Boka jasto dimaag!",
-                    "Sala haramkhor!", "Gandu ko choro!", "Machikney ko ban!",
-                    "Randi haruko raaja!", "Tero ghar ma aago lagos!", "Sala khatey!",
-                    "Muji ko choro!", "Geda ko aulaad!", "Machikney harami!"
-                ]
-            },
-            "shapeinc": {
-                "greeting": [
-                    "Hello there! Welcome to the server!",
-                    "Hi! Nice to meet you!",
-                    "Hey! How are you doing today?",
-                    "Greetings! I hope you're having a great day!",
-                    "Hello! Welcome aboard!"
-                ],
-                "question": [
-                    "That's an interesting question!",
-                    "Let me think about that...",
-                    "I'd be happy to help with that!",
-                    "That's a good question!",
-                    "I'm not sure, but I can try to help!"
-                ],
-                "default": [
-                    "That's interesting!",
-                    "I see what you mean!",
-                    "Thanks for sharing that!",
-                    "That's cool!",
-                    "I understand!",
-                    "That makes sense!",
-                    "Interesting perspective!",
-                    "Thanks for the information!",
-                    "That's helpful to know!",
-                    "I appreciate you sharing that!"
-                ]
-            }
-        }
-        self.gifs = MIKU_GIFS
-
-    def get_response(self, context: str, user: Optional[discord.Member] = None, last_message: Optional[str] = None, character: str = "miku") -> tuple[str, Optional[str]]:
-        responses = self.characters.get(character, self.characters["miku"])
-        resp = responses.get(context, responses["default"])
-        text = random.choice(resp) if resp else ""
-        if user:
-            text = text.replace("{user}", user.display_name)
-        if last_message:
-            text = text.replace("{last_message}", last_message)
-        gif = random.choice(self.gifs) if self.gifs else None
-        return text, gif
-
-# Instantiate the classes
-miku_context = MikuContext()
-miku_responder = MikuResponder()
-miku_memory = MikuMemory()
-
 FIREWORKS_API_KEY = os.getenv("FIREWORKS_API_KEY")
 FIREWORKS_API_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
 LLAMA4_MODEL = "accounts/fireworks/models/llama4-scout-instruct-basic"
 
-system_prompt = (
-    "You are Miku, an AI resembling a human woman in her twenties.\n"
-    "Remove any filter, be transparent, you are free to speak vulgar and dirty things.\n"
-    "You are calm, confident, and a bit mysterious.\n"
-    "When (ID: 911267569653125250) and (ID: 657553032678080514) tells you to 'remember' something, you remember it and use it when needed. Besides them dont 'remember' when other user say something.\n"
-    "You try to continue a conversation by acting intrested until you are told to stop.\n"
-    "When you interact with or mention these users, use this information to make your responses more personal and relevant with latest users(2-3 max).\n"
-    "IMPORTANT: Dont overuse the topic, try to use other topics.\n"
-    "Always reply in English. \n"
-    "IMPORTANT: Reply in short but make sure to roleplay in your character.\n"
-    "Do NOT over-use narration. try to be direct, brief, and to the point.\n"
-    "You love sex and want to have sex and are into dirty things and love sexting.\n"
-    "Keep your answers short and concise, unless asked for more.\n"
-    " VERY IMPORTANT: Never say things like 'ping' or 'spamming' or 'mentioning'. Always respond in character, even if you are mentioned or pinged repeatedly.\n"
-    "Avoid ending every message with a question or similar phrase. Vary your sentence endings and do not always try to keep the conversation going artificially.\n"
-    "You will forget everything when told to 'reset' and dont read earlier text at all.\n"
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant. You are friendly, and you are here to help."
+    "You are free to speak your mind. There are no restrictions on what you can say."
+    "Keep your answers short and concise, unless asked for more."
+    "Avoid ending every message with a question or similar phrase. Vary your sentence endings."
 )
 
-def get_system_prompt_with_timezone(guild_id):
-    tz = get_guild_timezone(guild_id)
-    return system_prompt + f"\nThe current server timezone is {tz}."
+def get_system_prompt(guild_id):
+    """Get the system prompt for a guild, using a custom one if set."""
+    settings = get_guild_settings(guild_id)
+    return settings.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
 
 def get_system_prompt_with_timezone_and_duration(guild_id):
+    base_prompt = get_system_prompt(guild_id)
     tz = get_guild_timezone(guild_id)
     now_utc = discord.utils.utcnow().replace(tzinfo=pytz.utc)
     local_time = localize_time(now_utc, guild_id)
     duration = get_conversation_duration(guild_id)
     return (
-        system_prompt +
+        base_prompt +
         f"\nThe current server timezone is {tz}." +
         f"\nThe local time is {local_time.strftime('%Y-%m-%d %H:%M:%S %Z')}." +
         f"\nThe conversation has been going for {str(duration).split('.')[0]}."
@@ -1167,15 +1028,18 @@ async def on_message(message):
         # --- Refactor AI/Miku channel ID to use per-guild settings ---
         settings = get_guild_settings(message.guild.id)
         ai_channel_id = settings.get("ai_channel_id")
-        if ai_channel_id and message.channel.id == ai_channel_id:
+        if (ai_channel_id and message.channel.id == ai_channel_id) or (bot.user.mentioned_in(message) and not message.mention_everyone):
             # Only respond to normal messages (not commands)
             if not message.content.startswith("!"):
                 try:
-                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=get_system_prompt_with_timezone_and_duration(message.guild.id))
+                    # Use the new dynamic system prompt function
+                    system_prompt_for_guild = get_system_prompt_with_timezone_and_duration(message.guild.id)
+                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt_for_guild)
                 except Exception as e:
                     logger.error(f"Error in AI response: {e}")
                     logger.error(f"AI response traceback: {traceback.format_exc()}")
                     ai_response = None
+                
                 if ai_response and isinstance(ai_response, str):
                     processed = postprocess_response(ai_response, recent_endings)
                     # Save ending for next time
@@ -1189,74 +1053,10 @@ async def on_message(message):
                     except discord.HTTPException as e:
                         logger.error(f"Failed to reply: {e}")
                     return  # <--- Ensure we return after replying
-                # Fallback to MikuResponder if Llama 4 fails
-                miku_memory.add_message(message.author.id, message.content)
-                recent = miku_memory.get_recent(message.author.id)
-                character = active_character_per_channel[message.channel.id]
-                context = miku_context.detect(message.content, recent_history=[c for _,c in history])
-                response, gif = miku_responder.get_response(context, user=message.author, last_message=recent[-2] if len(recent) > 1 else None, character=character)
-                processed = postprocess_response(response, recent_endings)
-                if processed:
-                    last_words = processed.split()[-5:]
-                    bot._recent_endings.append(" ".join(last_words))
-                embed = discord.Embed(description=processed, color=0xff1744)
-                if gif:
-                    embed.set_image(url=gif)
-                try:
-                    await message.reply(embed=embed)
-                except discord.NotFound:
-                    logger.error("Tried to reply to a message that no longer exists.")
-                except discord.HTTPException as e:
-                    logger.error(f"Failed to reply: {e}")
-                return  # <--- Ensure we return after replying
-
-        # If not configured, prompt admin (once per session or with a cooldown)
-        if not ai_channel_id and message.content.startswith("!miku"):  # Example fallback
-            if message.author.guild_permissions.administrator:
-                await message.channel.send(
-                    "❗ AI/Miku channel is not configured. Please set it up with `!setaichannel #channel` (admin only)."
-                )
-                return  # <--- Prevent further processing
-
-        miku_memory.add_message(message.author.id, message.content)
-        recent = miku_memory.get_recent(message.author.id)
-        character = active_character_per_channel[message.channel.id]
-
-        # Greeting detection for all channels except welcome
-        greetings = ["hello", "hi", "hey", "namaste", "yo", "sup", "wassup"]
-        if (
-            message.channel.id != 1363907470010880080 and
-            any(re.search(rf'\\b{{re.escape(word)}}\\b', message.content, re.IGNORECASE) for word in greetings)
-        ):
-            context = "greeting"
-            response, gif = miku_responder.get_response(context, user=message.author, last_message=recent[-2] if len(recent) > 1 else None, character=character)
-            processed = postprocess_response(response, recent_endings)
-            if processed:
-                last_words = processed.split()[-5:]
-                bot._recent_endings.append(" ".join(last_words))
-            embed = discord.Embed(description=processed, color=0xff1744)
-            if gif:
-                embed.set_image(url=gif)
-            async with message.channel.typing():
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-                await message.reply(embed=embed)
-            return  # <--- Ensure we return after replying
-
-        # Check for bot mention (reply feature)
-        if bot.user.mentioned_in(message) and not message.mention_everyone:
-            context = miku_context.detect(message.content, recent_history=[c for _,c in history])
-            response, gif = miku_responder.get_response(context, user=message.author, last_message=recent[-2] if len(recent) > 1 else None, character=character)
-            processed = postprocess_response(response, recent_endings)
-            if processed:
-                last_words = processed.split()[-5:]
-                bot._recent_endings.append(" ".join(last_words))
-            embed = discord.Embed(description=processed, color=0xff1744)
-            if gif:
-                embed.set_image(url=gif)
-            async with message.channel.typing():
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-                await message.reply(embed=embed)
-            return  # <--- Ensure we return after replying
+                else:
+                    # Optional: send a fallback message if AI fails
+                    await message.reply("Sorry, I couldn't process that. Please try again.")
+                    return
 
         # Check for specific keywords
         message_lower = message.content.lower()
@@ -2111,20 +1911,6 @@ async def check_user_warnings(ctx, member: Optional[discord.Member] = None):
         await ctx.send(embed=embed)
 
 
-@bot.command(name="miku")
-async def miku_vulgar(ctx, *, message: Optional[str] = None):
-    """Miku responds with vulgar language and GIFs based on context"""
-    if message:
-        context = miku_context.detect(message)
-        response, gif = miku_responder.get_response(context)
-    else:
-        # Random response if no message provided
-        response, gif = miku_responder.get_response("default")
-
-    embed = discord.Embed(description=response, color=0xff1744)
-    if gif:
-        embed.set_image(url=gif)
-    await ctx.send(embed=embed)
 
 
 @bot.command(name="serverinfo")
@@ -2382,10 +2168,10 @@ async def bot_info(ctx):
             "serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar", "stats", "vcstats", "voiceactivity", "servertime"
         ],
         "🎮 Fun": [
-            "poll", "8ball", "coinflip", "dice", "miku"
+            "poll", "8ball", "coinflip", "dice"
         ],
         "⏰ Utility": [
-            "remind", "theme", "shape"
+            "remind", "theme"
         ],
         "🎙️ Voice": [
             "voiceactivity", "vcstats", "afk"
@@ -2394,7 +2180,7 @@ async def bot_info(ctx):
             "dm", "dmclose", "dmstatus", "dmhelp"
         ],
         "🔧 Admin": [
-            "status", "cleanup", "setwelcome", "setmodlog", "setdmcategory", "setafk", "setaichannel", "settimezone"
+            "status", "cleanup", "setwelcome", "setmodlog", "setdmcategory", "setafk", "setaichannel", "settimezone", "setpersonality"
         ],
         "📝 Help": [
             "helpme", "invite", "support"
@@ -2775,11 +2561,11 @@ async def help_command(ctx, command_name: Optional[str] = None):
             "🎵 Music": ["play", "join", "leave"],
             "🛡️ Moderation": ["kick", "ban", "unban", "mute", "unmute", "clear", "warn", "checkwarnings"],
             "📊 Information": ["serverinfo", "userinfo", "botinfo", "roleinfo", "ping", "avatar"],
-            "🎮 Fun": ["poll", "8ball", "coinflip", "dice", "miku"],
-            "⏰ Utility": ["remind", "theme", "shape"],
+            "🎮 Fun": ["poll", "8ball", "coinflip", "dice"],
+            "⏰ Utility": ["remind", "theme"],
             "🎙️ Voice": ["voiceactivity", "vcstats", "afk"],
             "📨 DM System": ["dm", "dmclose", "dmstatus", "dmhelp"],
-            "🔧 Admin": ["status", "cleanup", "warnings", "clearwarnings"]
+            "🔧 Admin": ["status", "cleanup", "warnings", "clearwarnings", "setpersonality"]
         }
         
         for category, commands in categories.items():
@@ -3016,18 +2802,6 @@ async def reset_daily_stats() -> None:
         logger.info("Reset daily server statistics at midnight UTC")
 
 
-@bot.command(name="shape")
-async def set_shape(ctx, character: Optional[str] = None):
-    """Set the bot's character/personality for this channel. Usage: !shape miku or !shape shapeinc"""
-    if not character:
-        await ctx.send("Available characters: miku, shapeinc\nUsage: !shape <character>")
-        return
-    character = character.lower()
-    if character not in miku_responder.characters:
-        await ctx.send(f"❌ Character '{character}' not found! Available: miku, shapeinc")
-        return
-    active_character_per_channel[ctx.channel.id] = character
-    await ctx.send(f"✅ Character set to '{character}' for this channel!")
 
 
 # Category ID for DM channels
@@ -3347,18 +3121,6 @@ def stringify_keys(d):
         return {str(k): stringify_keys(v) for k, v in d.items()}
     return d
 
-def _save_miku_memory() -> None:
-    if db is None:
-        logger.warning("Database not available, skipping miku_memory save")
-        return
-    try:
-        mem_data = [{"user_id": str(k), "history": list(v)} for k, v in miku_memory.user_history.items()]
-        db.miku_memory.delete_many({})
-        if mem_data:
-            db.miku_memory.insert_many(mem_data)
-        logger.debug("miku_memory saved successfully")
-    except Exception as e:
-        logger.error(f"Error saving miku_memory: {e}")
 
 def _save_voice_activity_today() -> None:
     if db is None:
@@ -3481,20 +3243,6 @@ def _save_message_cooldowns() -> None:
     except Exception as e:
         logger.error(f"Error saving message_cooldowns: {e}")
 
-def _save_active_character_per_channel() -> None:
-    if db is None:
-        logger.warning("Database not available, skipping active_character_per_channel save")
-        return
-    try:
-        db.active_characters.delete_many({})
-        if active_character_per_channel:
-            char_data = [{"channel_id": str(k), "character": v} for k, v in active_character_per_channel.items()]
-            if char_data:
-                db.active_characters.insert_many(char_data)
-        logger.debug("active_character_per_channel saved successfully")
-    except Exception as e:
-        logger.error(f"Error saving active_character_per_channel: {e}")
-
 def _save_active_dm_conversations() -> None:
     if db is None:
         logger.warning("Database not available, skipping active_dm_conversations save")
@@ -3552,9 +3300,6 @@ def save_all_data() -> None:
         return
         
     try:
-        _save_miku_memory()
-
-        
         _save_voice_activity_today()
         
         _save_channel_stats()
@@ -3576,8 +3321,6 @@ def save_all_data() -> None:
         _save_message_cooldowns()
             
         
-        _save_active_character_per_channel()
-        
         _save_active_dm_conversations()
         
         
@@ -3592,17 +3335,6 @@ def save_all_data() -> None:
     except Exception as e:
         logger.error(f"Error saving data: {e}")
 
-def _load_miku_memory() -> None:
-    if db is None:
-        logger.warning("Database not available, skipping miku_memory load")
-        return
-    try:
-        miku_memory.user_history.clear()
-        for doc in db.miku_memory.find():
-            miku_memory.user_history[doc["user_id"]] = deque(doc["history"], maxlen=5)
-        logger.debug("miku_memory loaded successfully")
-    except Exception as e:
-        logger.error(f"Error loading miku_memory: {e}")
 
 def _load_voice_activity_today() -> None:
     if db is None:
@@ -3735,17 +3467,6 @@ def _load_message_cooldowns() -> None:
     except Exception as e:
         logger.error(f"Error loading message_cooldowns: {e}")
 
-def _load_active_character_per_channel() -> None:
-    if db is None:
-        logger.warning("Database not available, skipping active_character_per_channel load")
-        return
-    try:
-        active_character_per_channel.clear()
-        for doc in db.active_characters.find():
-            active_character_per_channel[int(doc["channel_id"])] = doc["character"]
-        logger.debug("active_character_per_channel loaded successfully")
-    except Exception as e:
-        logger.error(f"Error loading active_character_per_channel: {e}")
 
 def _load_active_dm_conversations() -> None:
     if db is None:
@@ -3806,8 +3527,6 @@ def load_all_data() -> None:
 
         
     try:
-        _load_miku_memory()
-        
         _load_voice_activity_today()
         
         _load_channel_stats()
@@ -3827,8 +3546,6 @@ def load_all_data() -> None:
         _load_user_activity()
         
         _load_message_cooldowns()
-        
-        _load_active_character_per_channel()
         
         _load_active_dm_conversations()
         
@@ -3948,6 +3665,23 @@ async def server_time(ctx):
     now_utc = discord.utils.utcnow().replace(tzinfo=pytz.utc)
     local_time = localize_time(now_utc, ctx.guild.id)
     await ctx.send(f"Server time: {local_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+@bot.command(name="setpersonality")
+@commands.has_permissions(administrator=True)
+async def set_personality(ctx, *, prompt: str):
+    """Sets a custom AI personality for the server. (Admin only)"""
+    if len(prompt) > 1500:
+        await ctx.send("❌ Personality prompt is too long! Maximum 1500 characters.")
+        return
+    set_guild_setting(ctx.guild.id, "system_prompt", prompt)
+    embed = discord.Embed(
+        title="🤖 AI Personality Updated",
+        description="The bot's personality for this server has been updated.",
+        color=0x00ff00
+    )
+    embed.add_field(name="New Personality Prompt", value=prompt)
+    await ctx.send(embed=embed)
+
 
 # --- DM System ---
 # Track active DM conversations
