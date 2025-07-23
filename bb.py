@@ -2616,19 +2616,20 @@ GAME_LIMITS = {
 }
 
 class LobbyView(discord.ui.View):
-    def __init__(self, author, game):
-        super().__init__(timeout=3600)  # 1 hour timeout
+    def __init__(self, author, game, vc):
+        super().__init__(timeout=3600)
         self.author = author
         self.game = game.lower()
         self.limit = GAME_LIMITS.get(self.game, 2)
         self.players = [author]
         self.message = None
+        self.vc = vc
 
     async def update_embed(self, interaction: discord.Interaction):
         player_mentions = "\n".join([p.mention for p in self.players])
         embed = discord.Embed(
             title=f"✨ {self.game.capitalize()} Lobby ✨",
-            description=f"**Players ({len(self.players)}/{self.limit})**:\n{player_mentions}",
+            description=f"**Players ({len(self.players)}/{self.limit})**:\n{player_mentions}\n\nVoice Channel: {self.vc.mention}",
             color=0x2ecc71
         )
         embed.set_footer(text=f"Lobby created by {self.author.display_name}")
@@ -2643,6 +2644,11 @@ class LobbyView(discord.ui.View):
             return await interaction.response.send_message("This lobby is full.", ephemeral=True)
 
         self.players.append(interaction.user)
+        try:
+            await interaction.user.move_to(self.vc)
+        except discord.HTTPException:
+            pass # User not in a VC to be moved
+        
         await self.update_embed(interaction)
 
         if len(self.players) == self.limit:
@@ -2654,15 +2660,24 @@ class LobbyView(discord.ui.View):
             return await interaction.response.send_message("You are not in this lobby.", ephemeral=True)
         
         if interaction.user == self.author:
-            return await interaction.response.send_message("The lobby creator cannot leave.", ephemeral=True)
+            return await interaction.response.send_message("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
 
         self.players.remove(interaction.user)
+        if interaction.user.voice and interaction.user.voice.channel == self.vc:
+            try:
+                # This will disconnect the user if they have no previous channel
+                await interaction.user.move_to(None)
+            except discord.HTTPException:
+                pass # Fails if user disconnects manually at the same time
+
         await self.update_embed(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.author:
             return await interaction.response.send_message("Only the lobby creator can cancel.", ephemeral=True)
+
+        await self.vc.delete(reason="Lobby cancelled by host.")
 
         for child in self.children:
             child.disabled = True
@@ -2672,41 +2687,14 @@ class LobbyView(discord.ui.View):
         self.stop()
 
     async def start_match(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        category = discord.utils.get(guild.categories, name="Matches")
-        if not category:
-            category = await guild.create_category("Matches")
+        for child in self.children:
+            child.disabled = True
+        
+        await self.vc.edit(name=f"✨ {self.game.capitalize()} Match")
 
-        overwrites = {guild.default_role: discord.PermissionOverwrite(connect=False)}
-        for player in self.players:
-            overwrites[player] = discord.PermissionOverwrite(connect=True, view_channel=True)
-        overwrites[guild.me] = discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
-
-        try:
-            vc = await guild.create_voice_channel(
-                f"✨ {self.game.capitalize()} Match", 
-                overwrites=overwrites, 
-                category=category,
-                user_limit=self.limit
-            )
-
-            for child in self.children:
-                child.disabled = True
-            
-            embed = discord.Embed(title="Match Starting!", description=f"Voice channel created: {vc.mention}", color=0x3498db)
-            await interaction.message.edit(embed=embed, view=self)
-
-            for player in self.players:
-                try:
-                    await player.move_to(vc)
-                except discord.HTTPException:
-                    pass # User might not be in a VC
-            
-            self.stop()
-
-        except Exception as e:
-            logger.error(f"Error starting match: {e}")
-            await interaction.followup.send("Failed to start the match.", ephemeral=True)
+        embed = discord.Embed(title="Match Starting!", description=f"The lobby is full! The match is starting in {self.vc.mention}", color=0x3498db)
+        await interaction.message.edit(embed=embed, view=self)
+        self.stop()
 
 @bot.command(name="match")
 async def match(ctx, game: str):
@@ -2721,12 +2709,38 @@ async def match(ctx, game: str):
     if game_name not in GAME_LIMITS:
         return await ctx.send(f"❌ Invalid game. Supported games: {', '.join(GAME_LIMITS.keys())}")
 
-    view = LobbyView(ctx.author, game_name)
+    # Create the voice channel immediately
+    guild = ctx.guild
+    limit = GAME_LIMITS.get(game_name, 2)
+    category = discord.utils.get(guild.categories, name="Matches")
+    if not category:
+        category = await guild.create_category("Matches")
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(connect=False),
+        ctx.author: discord.PermissionOverwrite(connect=True, view_channel=True),
+        guild.me: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True)
+    }
+
+    try:
+        vc = await guild.create_voice_channel(
+            f"✨ {game_name.capitalize()} Lobby", 
+            overwrites=overwrites, 
+            category=category,
+            user_limit=limit
+        )
+        if ctx.author.voice:
+            await ctx.author.move_to(vc)
+    except Exception as e:
+        logger.error(f"Failed to create lobby VC: {e}")
+        return await ctx.send("❌ Could not create the lobby voice channel. Check my permissions.")
+
+    view = LobbyView(ctx.author, game_name, vc)
     
     player_mentions = "\n".join([p.mention for p in view.players])
     embed = discord.Embed(
         title=f"✨ {game_name.capitalize()} Lobby ✨",
-        description=f"**Players ({len(view.players)}/{view.limit})**:\n{player_mentions}",
+        description=f"**Players ({len(view.players)}/{view.limit})**:\n{player_mentions}\n\nVoice Channel: {vc.mention}",
         color=0x2ecc71
     )
     embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
