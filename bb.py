@@ -1051,6 +1051,7 @@ async def on_message(message):
         except Exception as e:
             logger.error(f"Error in auto_moderate: {e}")
             logger.error(f"Auto-moderation traceback: {traceback.format_exc()}")
+            # await ctx.send("❌ An unexpected error occurred while processing your command.")
 
         # Always use recent channel history for context
         try:
@@ -2621,9 +2622,6 @@ class MatchView(discord.ui.View):
             await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
 
 
-
-
-
 GAME_LIMITS = {
     "valorant": 5,
     "peak": 4,
@@ -2661,15 +2659,10 @@ class RoleButton(discord.ui.Button):
 
         if role in member.roles:
             await member.remove_roles(role, reason="Toggled off via button")
+            await interaction.followup.send(f"❌ Role '{role_name}' removed.", ephemeral=True)
         else:
             await member.add_roles(role, reason="Toggled on via button")
-
-        # Move the player to the voice channel
-        if self.view.vc and interaction.user.voice:
-            try:
-                await interaction.user.move_to(self.view.vc)
-            except (discord.Forbidden, discord.HTTPException) as e:
-                logger.warning(f"Could not move user {interaction.user.display_name} to VC: {e}")
+            await interaction.followup.send(f"✅ Role '{role_name}' added.", ephemeral=True)
 
         # Refresh the view with updated button styles
         await interaction.edit_original_response(view=RoleButtonView(member))
@@ -4140,208 +4133,6 @@ def update_weekly_voice_time(guild_id, user_id, seconds):
         voice_activity_weekly[guild_id][user_id] = [0] * 7
     idx = get_weekday_index()
     voice_activity_weekly[guild_id][user_id][idx] += seconds
-
-async def ensure_voice(ctx):
-    if ctx.author.voice is None or ctx.author.voice.channel is None:
-        await ctx.send("❌ You are not in a voice channel!")
-        return None
-    channel = ctx.author.voice.channel
-    if ctx.voice_client is None:
-        try:
-            await channel.connect()
-        except asyncio.TimeoutError:
-            await ctx.send("❌ Failed to connect to voice channel: Connection timed out.")
-            logger.error(f"TimeoutError when connecting to voice channel {channel.name} in guild {ctx.guild.name}")
-            return None
-        except Exception as e:
-            await ctx.send(f"❌ An unexpected error occurred while connecting to voice channel: {e}")
-            logger.error(f"Error connecting to voice channel {channel.name} in guild {ctx.guild.name}: {e}")
-            return None
-    elif ctx.voice_client.channel != channel:
-        await ctx.voice_client.move_to(channel)
-    return ctx.voice_client
-
-@bot.command(name="join", help="Join your voice channel.", usage="")
-async def join(ctx):
-    vc = await ensure_voice(ctx)
-    if vc:
-        await ctx.send(f"✅ Joined {vc.channel.mention}")
-
-@bot.command(name="leave", help="Leave the voice channel.", usage="")
-async def leave(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("👋 Left the voice channel.")
-    else:
-        await ctx.send("❌ I'm not in a voice channel!")
-
-async def play_next(ctx):
-    guild_id = ctx.guild.id
-    queue = music_queues.get(guild_id, [])
-    if not queue:
-        now_playing.pop(guild_id, None)
-        return
-    track = queue.pop(0)
-    now_playing[guild_id] = track
-    source = await YTDLSource.from_url(track['url'], loop=bot.loop, stream=True)
-    if source is None:
-        logger.error(f"Failed to get YTDLSource for {track['url']}. Skipping to next song.")
-        await ctx.send(f"❌ Could not play **{track.get('title', 'unknown song')}**. Skipping to next song.")
-        bot.loop.create_task(play_next(ctx))
-        return
-    
-    now_playing[guild_id]['title'] = source.title
-
-    ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
-    await ctx.send(f"🎶 Now playing: **{source.title}**")
-
-@bot.command(name="play", help="Play a song from YouTube or Spotify (url or search).", usage="<url or search>")
-async def play(ctx, *, url: str):
-    vc = await ensure_voice(ctx)
-    if not vc:
-        return
-    guild_id = ctx.guild.id
-    if guild_id not in music_queues:
-        music_queues[guild_id] = []
-    
-    if sp and ("open.spotify.com" in url or url.strip().startswith("spotify:")):
-        try:
-            await ctx.send("🔎 Fetching Spotify tracks...")
-            tracks_to_add = []
-            if "/track/" in url:
-                track = sp.track(url)
-                query = f"{track['name']} {track['artists'][0]['name']} audio"
-                tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
-                await ctx.send(f"🎵 Added **{track['name']}** by **{track['artists'][0]['name']}** to queue!")
-            elif "/playlist/" in url:
-                playlist = sp.playlist_tracks(url)
-                for item in playlist['items']:
-                    track = item['track']
-                    query = f"{track['name']} {track['artists'][0]['name']} audio"
-                    tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
-                await ctx.send(f"🎵 Added {len(playlist['items'])} tracks from Spotify playlist to queue!")
-            elif "/album/" in url:
-                album = sp.album_tracks(url)
-                for track in album['items']:
-                    query = f"{track['name']} {track['artists'][0]['name']} audio"
-                    tracks_to_add.append({'url': query, 'title': f"{track['name']} by {track['artists'][0]['name']}", 'requester': ctx.author.display_name})
-                await ctx.send(f"🎵 Added {len(album['items'])} tracks from Spotify album to queue!")
-            else:
-                return await ctx.send("❌ Unsupported Spotify link.")
-
-            music_queues[guild_id].extend(tracks_to_add)
-            if not vc.is_playing():
-                await play_next(ctx)
-            return
-        except Exception as e:
-            logger.error(f"Spotify error: {e}")
-            await ctx.send(f"❌ An error occurred with Spotify: {e}")
-            return
-
-    try:
-        await ctx.send(f"🔎 Searching for `{url}`...")
-        ytdl = yt_dlp.YoutubeDL({'format': 'bestaudio', 'noplaylist':'True', 'quiet': True, 'default_search': 'auto'})
-        info = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-        
-        if 'entries' in info:
-            info = info['entries'][0]
-
-        track_info = {'url': info['webpage_url'], 'title': info['title'], 'requester': ctx.author.display_name}
-        music_queues[guild_id].append(track_info)
-        await ctx.send(f"🎵 Added **{info['title']}** to queue!")
-        if not vc.is_playing():
-            await play_next(ctx)
-    except Exception as e:
-        logger.error(f"Error playing song: {e}")
-        await ctx.send(f"❌ An error occurred while trying to play: {e}")
-
-@bot.command(name="skip", help="Skip the current song.", usage="")
-async def skip(ctx):
-    vc = ctx.voice_client
-    if not vc or not vc.is_playing():
-        return await ctx.send("❌ I am not playing anything.")
-    vc.stop()
-    await ctx.send("⏭️ Skipped song.")
-
-@bot.command(name="queue", help="Show the music queue.", usage="")
-async def queue(ctx):
-    guild_id = ctx.guild.id
-    queue = music_queues.get(guild_id, [])
-    
-    embed = discord.Embed(title="🎵 Music Queue", color=0x3498db)
-    
-    currently_playing = now_playing.get(guild_id)
-    if currently_playing:
-        embed.add_field(name="🎶 Now Playing", value=f"**{currently_playing['title']}**\nRequested by: {currently_playing['requester']}", inline=False)
-
-    if not queue:
-        if not currently_playing:
-            embed.description = "The queue is empty."
-    else:
-        queue_text = ""
-        for i, track in enumerate(queue[:10]):
-            queue_text += f"{i+1}. **{track['title']}** (Requested by: {track['requester']})\n"
-        embed.add_field(name="📜 Up Next", value=queue_text, inline=False)
-    
-    if len(queue) > 10:
-        embed.set_footer(text=f"And {len(queue) - 10} more...")
-        
-    await ctx.send(embed=embed)
-
-@bot.command(name="np", help="Show the currently playing song.", usage="")
-async def now_playing_command(ctx):
-    guild_id = ctx.guild.id
-    track = now_playing.get(guild_id)
-    if not track:
-        return await ctx.send("🎵 Nothing is playing.")
-        
-    embed = discord.Embed(title="🎶 Now Playing", description=track['title'], color=0x3498db)
-    embed.add_field(name="Requested by", value=track['requester'])
-    await ctx.send(embed=embed)
-
-@bot.command(name="stop", help="Stop the music and clear the queue.", usage="")
-async def stop(ctx):
-    guild_id = ctx.guild.id
-    vc = ctx.voice_client
-    if not vc:
-        return await ctx.send("❌ I am not in a voice channel.")
-    
-    if guild_id in music_queues:
-        music_queues[guild_id] = []
-    now_playing.pop(guild_id, None)
-    if vc.is_playing():
-        vc.stop()
-    await ctx.send("⏹️ Stopped the music and cleared the queue.")
-
-@bot.command(name="volume", help="Change the music volume.", usage="<1-100>")
-async def volume(ctx, volume: int):
-    vc = ctx.voice_client
-    if not vc or not vc.source:
-        return await ctx.send("❌ I am not playing anything.")
-    
-    if not 0 <= volume <= 100:
-        return await ctx.send("❌ Volume must be between 0 and 100.")
-        
-    vc.source.volume = volume / 100
-    await ctx.send(f"🔊 Volume set to {volume}%")
-
-@bot.command(name="pause", help="Pause the music.", usage="")
-async def pause(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_playing():
-        vc.pause()
-        await ctx.send("⏸️ Paused the music.")
-    else:
-        await ctx.send("❌ I am not playing anything.")
-
-@bot.command(name="resume", help="Resume the music.", usage="")
-async def resume(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_paused():
-        vc.resume()
-        await ctx.send("▶️ Resumed the music.")
-    else:
-        await ctx.send("❌ The music is not paused.")
 
 async def reset_voice_activity_weekly() -> None:
     while True:
