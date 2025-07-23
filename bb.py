@@ -252,13 +252,12 @@ from discord.ext import tasks
 import datetime
 
 intents = discord.Intents.default()
-intents.voice_states = True  # Needed for voice channel events
-intents.guilds = True  # Needed for server events
-intents.members = True  # Needed for member join/leave events
-intents.message_content = True  # Needed to read message content
+intents.voice_states = True
+intents.guilds = True
+intents.members = True
+intents.message_content = True
 
-# --- Bot Initialization ---
-bot = commands.Bot(command_prefix="!", intents=intents)  # '!' is the command prefix
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 TEMPLATE_CHANNELS = {
     "Duo": {
@@ -1076,84 +1075,47 @@ async def reset_personality(ctx):
     await ctx.send("✅ AI personality has been reset to the default.")
 
 async def on_message(message):
-    try:
-        # Safe channel name for logging
-        channel_info = getattr(message.channel, 'name', None)
-        if not channel_info:
-            channel_info = f"{type(message.channel).__name__} (ID: {getattr(message.channel, 'id', 'N/A')})"
-        logger.info(f"Processing message from {message.author.display_name} in {channel_info}")
+    if message.author == bot.user:
+        return
 
-        if message.author == bot.user:
-            return  # Ignore messages from the bot itself
+    if isinstance(message.channel, discord.DMChannel):
+        await handle_dm_reply(message)
+        return
 
-        # If this is a DM from a user, handle DM reply and return
-        if isinstance(message.channel, discord.DMChannel):
-            await handle_dm_reply(message)
-            return
+    # Get guild-specific settings
+    settings = get_guild_settings(message.guild.id)
+    ai_channel_id = settings.get("ai_channel_id")
 
-        # Update server stats
-        server_stats["messages_today"] += 1
+    # AI response logic
+    is_ai_channel = ai_channel_id and message.channel.id == ai_channel_id
+    is_mention = bot.user.mentioned_in(message) and not message.mention_everyone
 
-        # Auto-moderation checks
-        try:
-            await auto_moderate(message)
-        except Exception as e:
-            logger.error(f"Error in auto_moderate: {e}")
-            logger.error(f"Auto-moderation traceback: {traceback.format_exc()}")
-            # await ctx.send("❌ An unexpected error occurred while processing your command.")
-
-        # Always use recent channel history for context
+    if (is_ai_channel or is_mention) and not message.content.startswith('!'):
         try:
             history = await get_recent_channel_history(message.channel, bot.user, message, limit=20)
-        except Exception as e:
-            logger.error(f"Error getting channel history: {e}")
-            logger.error(f"Channel history traceback: {traceback.format_exc()}")
-            history = []
-
-        # Track recent endings for anti-repetition
-        if not hasattr(bot, '_recent_endings'):
-            bot._recent_endings = []
-        recent_endings = bot._recent_endings[-3:]
-
-        # Process commands first
-        await bot.process_commands(message)
-
-        # --- AI Response Logic ---
-        # Check if the message was a command; if so, we're done.
-        # We check this AFTER processing commands to see if a command was actually invoked.
-        if message.content.startswith('!'):
-             # Check if the invoked command is in the bot's command list
-            command_name = message.content.split(' ')[0][1:]
-            if bot.get_command(command_name):
-                return # It was a valid command, so don't proceed with AI response
-
-        settings = get_guild_settings(message.guild.id)
-        ai_channel_id = settings.get("ai_channel_id")
-
-        # Respond if in the AI channel OR if the bot is mentioned directly
-        if (ai_channel_id and message.channel.id == ai_channel_id) or (bot.user.mentioned_in(message) and not message.mention_everyone):
-            try:
-                system_prompt_for_guild = get_system_prompt_with_timezone_and_duration(message.guild.id)
-                ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt_for_guild)
-            except Exception as e:
-                logger.error(f"Error in AI response: {e}")
-                logger.error(f"AI response traceback: {traceback.format_exc()}")
-                ai_response = None
-            
-            if ai_response and isinstance(ai_response, str):
-                processed = postprocess_response(ai_response, recent_endings)
-                if processed:
-                    last_words = processed.split()[-5:]
-                    bot._recent_endings.append(" ".join(last_words))
-                try:
-                    await message.reply(processed)
-                except discord.NotFound:
-                    logger.error("Tried to reply to a message that no longer exists.")
-                except discord.HTTPException as e:
-                    logger.error(f"Failed to reply: {e}")
+            system_prompt = get_system_prompt_with_timezone_and_duration(message.guild.id)
+            ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt)
+            if ai_response:
+                await message.reply(ai_response)
             else:
-                # Optional: send a fallback message if AI fails
-                await message.reply("Sorry, I couldn't process that. Please try again.")
+                await message.reply("Sorry, I couldn't generate a response.")
+        except Exception as e:
+            logger.error(f"Error during AI response generation: {e}")
+            await message.reply("An error occurred while trying to respond.")
+        return # Stop further processing if we handled it as an AI message
+
+    # Process commands and other logic if it wasn't an AI message
+    try:
+        await auto_moderate(message)
+        await bot.process_commands(message)
+        # Keyword responses can go here if needed
+        message_lower = message.content.lower()
+        if 'peak' in message_lower and '?' in message_lower:
+            await message.channel.send('https://discord.gg/peak')
+        elif 'valorant' in message_lower and '?' in message_lower:
+            await message.channel.send('https://discord.gg/valorant')
+    except Exception as e:
+        logger.error(f"Error in post-AI message processing: {e}")
 
         # Check for specific keywords
         message_lower = message.content.lower()
