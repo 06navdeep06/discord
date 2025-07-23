@@ -248,6 +248,9 @@ logger = logging.getLogger(__name__)
 
 # --- Discord Bot Intents ---
 # Intents control which events the bot receives from Discord
+from discord.ext import tasks
+import datetime
+
 intents = discord.Intents.default()
 intents.voice_states = True  # Needed for voice channel events
 intents.guilds = True  # Needed for server events
@@ -561,10 +564,20 @@ async def miku(ctx, *, prompt: str):
             logger.error(f"Error in !miku command: {e}")
             logger.error(f"Miku command traceback: {traceback.format_exc()}")
             await ctx.reply("❌ An unexpected error occurred while processing your command.")
+
+
+
 @bot.event
 async def on_ready():
     if bot.user:
         logger.info(f"✅ Logged in as {bot.user.name}")
+    
+    # Add persistent views
+    bot.add_view(RoleSelectView())
+    
+    # Start scheduled tasks
+    daily_role_reset.start()
+    
     logger.info(f"Bot is in {len(bot.guilds)} guilds")
 
     # Ensure bot.loop is set
@@ -2621,6 +2634,53 @@ GAME_LIMITS = {
     "agrou": 12
 }
 
+class RoleSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=game.capitalize()) for game in GAME_LIMITS.keys()]
+        super().__init__(placeholder="Choose your game roles...", min_values=0, max_values=len(options), options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+        member = interaction.user
+
+        # Get all possible game roles
+        all_game_roles = []
+        for game_name in GAME_LIMITS.keys():
+            role = discord.utils.get(guild.roles, name=game_name.capitalize())
+            if role:
+                all_game_roles.append(role)
+            else:
+                # Create the role if it doesn't exist
+                try:
+                    role = await guild.create_role(name=game_name.capitalize(), reason="Game role for matchmaking")
+                    all_game_roles.append(role)
+                except discord.Forbidden:
+                    return await interaction.followup.send("I don't have permissions to create roles.", ephemeral=True)
+
+        # Roles to add and current roles the member has
+        roles_to_add = [discord.utils.get(guild.roles, name=selected) for selected in self.values]
+        current_member_game_roles = [role for role in member.roles if role in all_game_roles]
+
+        # Roles to remove
+        roles_to_remove = [role for role in current_member_game_roles if role not in roles_to_add]
+
+        try:
+            if roles_to_add:
+                await member.add_roles(*roles_to_add, reason="Self-assigned role")
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="Self-removed role")
+            
+            await interaction.followup.send(f"Your roles have been updated!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("I don't have permissions to manage your roles.", ephemeral=True)
+
+class RoleSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(RoleSelect())
+
 class LobbyView(discord.ui.View):
     def __init__(self, author, game, vc):
         super().__init__(timeout=3600)
@@ -2751,21 +2811,62 @@ async def match(ctx, game: str):
     )
     embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
     
-    # Targeted User Pinging
+    # Game Role Pinging
     ping_content = None
-    looking_to_play_role = discord.utils.get(ctx.guild.roles, name="Looking to Play")
     game_role = discord.utils.get(ctx.guild.roles, name=game_name.capitalize())
-
-    if looking_to_play_role and game_role:
-        interested_players = [
-            member for member in looking_to_play_role.members 
-            if game_role in member.roles and member != ctx.author
-        ]
-        if interested_players:
-            ping_content = " ".join([p.mention for p in interested_players])
+    if game_role:
+        ping_content = game_role.mention
 
     message = await ctx.send(content=ping_content, embed=embed, view=view)
     view.message = message
+
+
+# Set timezone for Nepal
+nepal_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=45))
+
+@tasks.loop(time=datetime.time(hour=4, minute=0, tzinfo=nepal_tz))
+async def daily_role_reset():
+    """Runs daily at 4 AM UTC to remove all game roles from members."""
+    logger.info("Starting daily role reset...")
+    game_role_names = [game.capitalize() for game in GAME_LIMITS.keys()]
+
+    for guild in bot.guilds:
+        roles_to_remove = [role for role_name in game_role_names if (role := discord.utils.get(guild.roles, name=role_name))]
+
+        if not roles_to_remove:
+            continue
+
+        for member in guild.members:
+            member_roles_to_remove = [role for role in member.roles if role in roles_to_remove]
+            if member_roles_to_remove:
+                try:
+                    await member.remove_roles(*member_roles_to_remove, reason="Daily game role reset")
+                    logger.info(f"Removed roles from {member.display_name} in {guild.name}")
+                except discord.Forbidden:
+                    logger.warning(f"Could not remove roles from {member.display_name} in {guild.name} (Forbidden)")
+                except discord.HTTPException as e:
+                    logger.error(f"Failed to remove roles from {member.display_name} in {guild.name}: {e}")
+    logger.info("Daily role reset finished.")
+
+@bot.command(name="setassignroles")
+@commands.has_permissions(administrator=True)
+async def set_assign_roles_channel(ctx):
+    """Sets the channel for the self-assignable roles message."""
+    embed = discord.Embed(
+        title="✨ Assign Game Roles ✨",
+        description="Select the games you want to be notified for. You can select multiple.",
+        color=0x5865F2
+    )
+    view = RoleSelectView()
+    message = await ctx.send(embed=embed, view=view)
+    
+    # Store message and channel ID for persistence
+    settings = get_guild_settings(ctx.guild.id)
+    settings['assign_roles_channel_id'] = ctx.channel.id
+    settings['assign_roles_message_id'] = message.id
+    update_guild_settings(ctx.guild.id, settings)
+    
+    await ctx.message.delete() # Clean up the command message
 
 @bot.command(name="helpme")
 async def help_command(ctx, command_name: Optional[str] = None):
