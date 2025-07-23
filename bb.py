@@ -1026,7 +1026,6 @@ async def auto_moderate(message: discord.Message):
         logger.error(f"Error in auto-moderation: {e}")
 
 
-@bot.event
 @bot.command(name="set_personality")
 @commands.has_permissions(administrator=True)
 async def set_personality(ctx, *, personality: str):
