@@ -2603,25 +2603,7 @@ class MatchView(discord.ui.View):
             await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
 
 
-@bot.command(name="match")
-async def match(ctx):
-    """Look for a match to have a voice chat with."""
-    settings = get_guild_settings(ctx.guild.id)
-    match_channel_id = settings.get("match_channel_id")
 
-    if not match_channel_id or ctx.channel.id != match_channel_id:
-        return await ctx.send(f"This command can only be used in the designated match channel.")
-
-    embed = discord.Embed(
-        title="💞 Looking for a Match!",
-        description=f"{ctx.author.mention} is looking for someone to talk to. Click the button below to accept the match!",
-        color=0xff69b4
-    )
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.set_footer(text="Match will expire in 1 hour.")
-    
-    view = MatchView(ctx.author)
-    await ctx.send(embed=embed, view=view)
 
 
 GAME_LIMITS = {
