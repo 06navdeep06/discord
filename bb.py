@@ -2753,56 +2753,60 @@ class LobbyView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, emoji="✅")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer immediately to prevent interaction timeouts.
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
 
-        if interaction.user in self.players:
-            return await interaction.followup.send("You are already in the lobby.", ephemeral=True)
-        if len(self.players) >= self.limit:
-            return await interaction.followup.send("This lobby is full.", ephemeral=True)
+            if interaction.user in self.players:
+                return await interaction.followup.send("You are already in the lobby.", ephemeral=True)
+            if len(self.players) >= self.limit:
+                return await interaction.followup.send("This lobby is full.", ephemeral=True)
 
-        self.players.append(interaction.user)
-        if interaction.user.voice:
-            # Retry logic for moving user
-            moved = False
-            for attempt in range(3):
-                try:
-                    await interaction.user.move_to(self.vc)
-                    moved = True
-                    break
-                except discord.DiscordServerError:
-                    await asyncio.sleep(1 + attempt)
-                except (discord.Forbidden, discord.HTTPException):
-                    break
-            if not moved:
-                await interaction.followup.send("I couldn't move you to the voice channel.", ephemeral=True)
+            self.players.append(interaction.user)
+            if interaction.user.voice:
+                moved = False
+                for attempt in range(3):
+                    try:
+                        await interaction.user.move_to(self.vc)
+                        moved = True
+                        break
+                    except discord.DiscordServerError:
+                        await asyncio.sleep(1 + attempt)
+                    except (discord.Forbidden, discord.HTTPException):
+                        break
+                if not moved:
+                    await interaction.followup.send("I couldn't move you to the voice channel.", ephemeral=True)
 
-        await self.update_embed(interaction)
+            await self.update_embed(interaction)
 
-        if len(self.players) == self.limit:
-            await self.start_match(interaction)
+            if len(self.players) == self.limit:
+                await self.start_match(interaction)
+        except discord.errors.NotFound:
+            logger.warning(f"Interaction for join_button expired before it could be handled.")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in join_button: {e}", exc_info=True)
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="❌")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Defer the interaction immediately to prevent timeouts.
-        # We are not sending an initial ephemeral response, so we can defer without it.
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
 
-        if interaction.user not in self.players:
-            # Use followup.send for ephemeral messages after deferring.
-            return await interaction.followup.send("You are not in this lobby.", ephemeral=True)
-        if interaction.user == self.author:
-            return await interaction.followup.send("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
+            if interaction.user not in self.players:
+                return await interaction.followup.send("You are not in this lobby.", ephemeral=True)
+            if interaction.user == self.author:
+                return await interaction.followup.send("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
 
-        self.players.remove(interaction.user)
-        if interaction.user.voice and interaction.user.voice.channel == self.vc:
-            try:
-                await interaction.user.move_to(None, reason="Left the lobby")
-            except (discord.Forbidden, discord.HTTPException):
-                await interaction.followup.send("I couldn't remove you from the VC. Please disconnect manually.", ephemeral=True)
+            self.players.remove(interaction.user)
+            if interaction.user.voice and interaction.user.voice.channel == self.vc:
+                try:
+                    await interaction.user.move_to(None, reason="Left the lobby")
+                except (discord.Forbidden, discord.HTTPException):
+                    await interaction.followup.send("I couldn't remove you from the VC. Please disconnect manually.", ephemeral=True)
 
-        # Correctly call update_embed with the original interaction to edit the message.
-        await self.update_embed(interaction)
+            await self.update_embed(interaction)
+        except discord.errors.NotFound:
+            logger.warning(f"Interaction for leave_button expired before it could be handled.")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in leave_button: {e}", exc_info=True)
 
     async def start_early_callback(self, interaction: discord.Interaction):
         if interaction.user != self.author:
@@ -2889,11 +2893,30 @@ async def match(ctx, game: str):
     )
     embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
     
-    # Game Role Pinging
+    # Game Role Pinging & DM Invites
     ping_content = None
     game_role = discord.utils.get(ctx.guild.roles, name=game_name.capitalize())
     if game_role:
         ping_content = game_role.mention
+
+        dm_embed = discord.Embed(
+            title=f"🎮 New {game_name.capitalize()} Lobby!",
+            description=f"{ctx.author.mention} has started a new lobby.",
+            color=0x3498db
+        )
+        dm_embed.add_field(name="Voice Channel", value=f"Click here to join: {vc.mention}")
+        dm_embed.set_footer(text=f"Sent because you have the '{game_role.name}' role.")
+
+        for member in game_role.members:
+            if member == ctx.author or member.bot:
+                continue
+            try:
+                await member.send(embed=dm_embed)
+                logger.info(f"Sent match DM to {member.display_name}")
+            except discord.Forbidden:
+                logger.warning(f"Could not send DM to {member.display_name}. DMs may be disabled.")
+            except Exception as e:
+                logger.error(f"Failed to send DM to {member.display_name}: {e}")
 
     message = await ctx.send(content=ping_content, embed=embed, view=view)
     view.message = message
