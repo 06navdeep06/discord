@@ -573,7 +573,9 @@ async def on_ready():
         logger.info(f"✅ Logged in as {bot.user.name}")
     
     # Add persistent views
-    bot.add_view(RoleSelectView())
+    # This view is now dynamic per-user, so we don't register it globally on startup.
+    # Instead, the !setassignroles command creates the initial view.
+    # The view then re-creates itself on each interaction.
     
     # Start scheduled tasks
     daily_role_reset.start()
@@ -2634,52 +2636,52 @@ GAME_LIMITS = {
     "agrou": 12
 }
 
-class RoleSelect(discord.ui.Select):
-    def __init__(self):
-        options = [discord.SelectOption(label=game.capitalize()) for game in GAME_LIMITS.keys()]
-        super().__init__(placeholder="Choose your game roles...", min_values=0, max_values=len(options), options=options)
+class RoleButton(discord.ui.Button):
+    def __init__(self, game_name: str, has_role: bool):
+        super().__init__(
+            label=game_name.capitalize(),
+            style=discord.ButtonStyle.success if has_role else discord.ButtonStyle.secondary,
+            custom_id=f"role_button_{game_name}"
+        )
+        self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        guild = interaction.guild
+        await interaction.response.defer()
         member = interaction.user
+        guild = interaction.guild
+        role_name = self.game_name.capitalize()
 
-        # Get all possible game roles
-        all_game_roles = []
-        for game_name in GAME_LIMITS.keys():
-            role = discord.utils.get(guild.roles, name=game_name.capitalize())
-            if role:
-                all_game_roles.append(role)
-            else:
-                # Create the role if it doesn't exist
-                try:
-                    role = await guild.create_role(name=game_name.capitalize(), reason="Game role for matchmaking")
-                    all_game_roles.append(role)
-                except discord.Forbidden:
-                    return await interaction.followup.send("I don't have permissions to create roles.", ephemeral=True)
+        role = discord.utils.get(guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await guild.create_role(name=role_name, reason="Auto-created game role")
+            except discord.Forbidden:
+                await interaction.followup.send("I lack permissions to create roles.", ephemeral=True)
+                return
 
-        # Roles to add and current roles the member has
-        roles_to_add = [discord.utils.get(guild.roles, name=selected) for selected in self.values]
-        current_member_game_roles = [role for role in member.roles if role in all_game_roles]
+        if role in member.roles:
+            await member.remove_roles(role, reason="Toggled off via button")
+        else:
+            await member.add_roles(role, reason="Toggled on via button")
 
-        # Roles to remove
-        roles_to_remove = [role for role in current_member_game_roles if role not in roles_to_add]
+        # Move the player to the voice channel
+        if self.view.vc and interaction.user.voice:
+            try:
+                await interaction.user.move_to(self.view.vc)
+            except (discord.Forbidden, discord.HTTPException) as e:
+                logger.warning(f"Could not move user {interaction.user.display_name} to VC: {e}")
 
-        try:
-            if roles_to_add:
-                await member.add_roles(*roles_to_add, reason="Self-assigned role")
-            if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason="Self-removed role")
-            
-            await interaction.followup.send(f"Your roles have been updated!", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.followup.send("I don't have permissions to manage your roles.", ephemeral=True)
+        # Refresh the view with updated button styles
+        await interaction.edit_original_response(view=RoleButtonView(member))
 
-class RoleSelectView(discord.ui.View):
-    def __init__(self):
+class RoleButtonView(discord.ui.View):
+    def __init__(self, member: discord.Member):
         super().__init__(timeout=None)
-        self.add_item(RoleSelect())
+        member_role_names = {role.name.lower() for role in member.roles}
+
+        for game in GAME_LIMITS.keys():
+            has_role = game.capitalize().lower() in member_role_names
+            self.add_item(RoleButton(game_name=game, has_role=has_role))
 
 class LobbyView(discord.ui.View):
     def __init__(self, author, game, vc):
@@ -2710,11 +2712,14 @@ class LobbyView(discord.ui.View):
             return await interaction.response.send_message("This lobby is full.", ephemeral=True)
 
         self.players.append(interaction.user)
-        try:
-            await interaction.user.move_to(self.vc)
-        except discord.HTTPException:
-            pass # User not in a VC to be moved
-        
+        if interaction.user.voice:
+            try:
+                await interaction.user.move_to(self.vc)
+            except (discord.Forbidden, discord.HTTPException):
+                # This can fail if the bot lacks permissions or the user isn't in a VC.
+                # We'll notify them ephemerally if it fails.
+                await interaction.followup.send("I couldn't move you to the voice channel. Please check my permissions.", ephemeral=True)
+
         await self.update_embed(interaction)
 
         if len(self.players) == self.limit:
@@ -2729,13 +2734,6 @@ class LobbyView(discord.ui.View):
             return await interaction.response.send_message("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
 
         self.players.remove(interaction.user)
-        if interaction.user.voice and interaction.user.voice.channel == self.vc:
-            try:
-                # This will disconnect the user if they have no previous channel
-                await interaction.user.move_to(None)
-            except discord.HTTPException:
-                pass # Fails if user disconnects manually at the same time
-
         await self.update_embed(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="🗑️")
@@ -2820,6 +2818,14 @@ async def match(ctx, game: str):
     message = await ctx.send(content=ping_content, embed=embed, view=view)
     view.message = message
 
+    # Move the host into the newly created voice channel
+    if ctx.author.voice:
+        try:
+            await ctx.author.move_to(vc)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.warning(f"Could not move host {ctx.author.display_name} to VC: {e}")
+            await ctx.send("I couldn't move you to the voice channel. Please check my permissions.", delete_after=10)
+
 
 # Set timezone for Nepal
 nepal_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=45))
@@ -2857,7 +2863,8 @@ async def set_assign_roles_channel(ctx):
         description="Select the games you want to be notified for. You can select multiple.",
         color=0x5865F2
     )
-    view = RoleSelectView()
+    # We pass the member so the initial view is rendered correctly for them
+    view = RoleButtonView(ctx.author)
     message = await ctx.send(embed=embed, view=view)
     
     # Store message and channel ID for persistence
