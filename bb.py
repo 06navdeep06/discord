@@ -2617,7 +2617,8 @@ GAME_LIMITS = {
     "counter-strike 2": 5,
     "league of legends": 5,
     "apex legends": 3,
-    "osu": 16
+    "osu": 16,
+    "agrou": 12
 }
 
 class LobbyView(discord.ui.View):
@@ -2750,17 +2751,18 @@ async def match(ctx, game: str):
     )
     embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
     
-    # Role Pinging
-    ping_messages = []
+    # Targeted User Pinging
+    ping_content = None
     looking_to_play_role = discord.utils.get(ctx.guild.roles, name="Looking to Play")
-    if looking_to_play_role:
-        ping_messages.append(looking_to_play_role.mention)
-
     game_role = discord.utils.get(ctx.guild.roles, name=game_name.capitalize())
-    if game_role:
-        ping_messages.append(game_role.mention)
 
-    ping_content = " ".join(ping_messages) if ping_messages else None
+    if looking_to_play_role and game_role:
+        interested_players = [
+            member for member in looking_to_play_role.members 
+            if game_role in member.roles and member != ctx.author
+        ]
+        if interested_players:
+            ping_content = " ".join([p.mention for p in interested_players])
 
     message = await ctx.send(content=ping_content, embed=embed, view=view)
     view.message = message
