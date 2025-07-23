@@ -2589,10 +2589,15 @@ class MatchView(discord.ui.View):
             await interaction.response.send_message("This match has already been accepted.", ephemeral=True)
             return
 
+        # Defer the interaction immediately to prevent timeouts.
+        await interaction.response.defer()
+
         self.matched = True
         button.disabled = True
         button.label = "Matched"
-        await interaction.message.edit(view=self)
+        
+        # Edit the original message the view is attached to.
+        await interaction.edit_original_response(view=self)
 
         guild = interaction.guild
         user1 = self.author
@@ -2615,11 +2620,14 @@ class MatchView(discord.ui.View):
 
             await user1.send(f"You've been matched with {user2.mention}! Click here to join the voice channel: {invite.url}")
             await user2.send(f"You've matched with {user1.mention}! Click here to join the voice channel: {invite.url}")
-            await interaction.response.send_message(f"{user2.mention} has accepted the match with {user1.mention}! A private voice channel has been created.", ephemeral=False)
+            
+            # Use followup to send a new message after deferring.
+            await interaction.followup.send(f"{user2.mention} has accepted the match with {user1.mention}! A private voice channel has been created.", ephemeral=False)
 
         except Exception as e:
             logger.error(f"Error creating match channel: {e}")
-            await interaction.response.send_message("Failed to create the match channel.", ephemeral=True)
+            # Use followup for error messages as well.
+            await interaction.followup.send("Failed to create the match channel.", ephemeral=True)
 
 
 GAME_LIMITS = {
