@@ -1115,38 +1115,45 @@ async def on_message(message):
             bot._recent_endings = []
         recent_endings = bot._recent_endings[-3:]
 
-        # --- Refactor AI/Miku channel ID to use per-guild settings ---
+        # Process commands first
+        await bot.process_commands(message)
+
+        # --- AI Response Logic ---
+        # Check if the message was a command; if so, we're done.
+        # We check this AFTER processing commands to see if a command was actually invoked.
+        if message.content.startswith('!'):
+             # Check if the invoked command is in the bot's command list
+            command_name = message.content.split(' ')[0][1:]
+            if bot.get_command(command_name):
+                return # It was a valid command, so don't proceed with AI response
+
         settings = get_guild_settings(message.guild.id)
         ai_channel_id = settings.get("ai_channel_id")
+
+        # Respond if in the AI channel OR if the bot is mentioned directly
         if (ai_channel_id and message.channel.id == ai_channel_id) or (bot.user.mentioned_in(message) and not message.mention_everyone):
-            # Only respond to normal messages (not commands)
-            if not message.content.startswith("!"):
+            try:
+                system_prompt_for_guild = get_system_prompt_with_timezone_and_duration(message.guild.id)
+                ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt_for_guild)
+            except Exception as e:
+                logger.error(f"Error in AI response: {e}")
+                logger.error(f"AI response traceback: {traceback.format_exc()}")
+                ai_response = None
+            
+            if ai_response and isinstance(ai_response, str):
+                processed = postprocess_response(ai_response, recent_endings)
+                if processed:
+                    last_words = processed.split()[-5:]
+                    bot._recent_endings.append(" ".join(last_words))
                 try:
-                    # Use the new dynamic system prompt function
-                    system_prompt_for_guild = get_system_prompt_with_timezone_and_duration(message.guild.id)
-                    ai_response = await fetch_llama4_response(message.content, user=message.author, history=history, system_prompt=system_prompt_for_guild)
-                except Exception as e:
-                    logger.error(f"Error in AI response: {e}")
-                    logger.error(f"AI response traceback: {traceback.format_exc()}")
-                    ai_response = None
-                
-                if ai_response and isinstance(ai_response, str):
-                    processed = postprocess_response(ai_response, recent_endings)
-                    # Save ending for next time
-                    if processed:
-                        last_words = processed.split()[-5:]
-                        bot._recent_endings.append(" ".join(last_words))
-                    try:
-                        await message.reply(processed)
-                    except discord.NotFound:
-                        logger.error("Tried to reply to a message that no longer exists.")
-                    except discord.HTTPException as e:
-                        logger.error(f"Failed to reply: {e}")
-                    return  # <--- Ensure we return after replying
-                else:
-                    # Optional: send a fallback message if AI fails
-                    await message.reply("Sorry, I couldn't process that. Please try again.")
-                    return
+                    await message.reply(processed)
+                except discord.NotFound:
+                    logger.error("Tried to reply to a message that no longer exists.")
+                except discord.HTTPException as e:
+                    logger.error(f"Failed to reply: {e}")
+            else:
+                # Optional: send a fallback message if AI fails
+                await message.reply("Sorry, I couldn't process that. Please try again.")
 
         # Check for specific keywords
         message_lower = message.content.lower()
