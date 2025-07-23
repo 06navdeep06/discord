@@ -2867,8 +2867,7 @@ async def match(ctx, game: str):
             category=category,
             user_limit=limit
         )
-        if ctx.author.voice:
-            await ctx.author.move_to(vc)
+
     except Exception as e:
         logger.error(f"Failed to create lobby VC: {e}")
         return await ctx.send("❌ Could not create the lobby voice channel. Check my permissions.")
@@ -2895,10 +2894,12 @@ async def match(ctx, game: str):
     # Move the host into the newly created voice channel
     if ctx.author.voice:
         try:
-            await ctx.author.move_to(vc)
+            await ctx.author.move_to(vc, reason="Match lobby created")
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.warning(f"Could not move host {ctx.author.display_name} to VC: {e}")
-            await ctx.send("I couldn't move you to the voice channel. Please check my permissions.", delete_after=10)
+            await ctx.send(f"I couldn't move you to the voice channel. Please join manually: {vc.mention}", delete_after=15)
+    else:
+        await ctx.send(f"Please join the voice channel to get started: {vc.mention}", delete_after=15)
 
 
 # Set timezone for Nepal
