@@ -66,6 +66,7 @@ Once the bot is running and in your server, you'll need to configure it using th
 - **`!setaichannel #channel`**: Designates a specific channel for AI chat.
 - **`!settimezone <Country or Timezone>`**: Sets the server's timezone (e.g., `!settimezone Nepal` or `!settimezone Asia/Kathmandu`).
 - **`!setdmcategory <Category ID>`**: Sets the category for the staff DM relay system.
+- **`!setmatchchannel #channel`**: Designates a channel for matchmaking lobbies.
 
 ### Voice Channel Templates
 Set up the voice channels that Miku will use as templates for creating new ones:
@@ -122,6 +123,17 @@ Set up the voice channels that Miku will use as templates for creating new ones:
 - `!coinflip`: Flips a coin.
 - `!dice [sides]`: Rolls a die.
 - `!miku [message]`: Interacts with the Miku personality.
+</details>
+
+<details>
+<summary><strong>💞 Matchmaking</strong></summary>
+
+- `!setmatchchannel #channel`: (Admin) Sets the official channel for matchmaking commands. Lobbies can only be created here.
+- `!match <game>`: Creates a matchmaking lobby for a specific game (e.g., `!match valorant`). The bot will create an interactive embed with buttons to **Join**, **Leave**, or **Cancel** the lobby. Once the lobby is full, the bot automatically creates a private voice channel and moves all players into it.
+  - Supported games and player limits:
+    - `valorant`: 5 players
+    - `peak`: 2 players
+    - `repo`: 4 players
 </details>
 
 <details>

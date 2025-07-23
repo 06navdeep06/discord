@@ -2216,8 +2216,11 @@ async def bot_info(ctx):
         "📝 Help": [
             "helpme", "invite", "support"
         ],
-        "🔧 Admin/Setup": [
+        "\ud83d\udd27 Admin/Setup": [
             "setduochannel", "settriochannel", "setsquadchannel", "setteamchannel"
+        ],
+        "\ud83d\udc9e Matchmaking": [
+            "match", "setmatchchannel"
         ],
     }
     
