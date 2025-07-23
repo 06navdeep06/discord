@@ -2635,13 +2635,11 @@ GAME_LIMITS = {
 }
 
 class RoleButton(discord.ui.Button):
-    def __init__(self, game_name: str, has_role: bool):
-        style = discord.ButtonStyle.success if has_role else discord.ButtonStyle.secondary
-        emoji = "✅" if has_role else "❌"
+    def __init__(self, game_name: str):
+        # All buttons will now have a consistent, neutral style.
         super().__init__(
             label=game_name.capitalize(),
-            style=style,
-            emoji=emoji,
+            style=discord.ButtonStyle.secondary,
             custom_id=f"role_button_{game_name}"
         )
         self.game_name = game_name
@@ -2674,20 +2672,15 @@ class RoleButton(discord.ui.Button):
             await interaction.followup.send("❌ I can't modify your roles. Please check my role is above the game roles and that I have the 'Manage Roles' permission.", ephemeral=True)
             return
 
-        # Re-create the view to update the buttons for the user who interacted
-        view = RoleButtonView(member)
-        await interaction.edit_original_response(view=view)
+        # The view no longer needs to be updated, as buttons are static.
+        pass
 
 class RoleButtonView(discord.ui.View):
-    def __init__(self, member: discord.Member):
+    def __init__(self):
         super().__init__(timeout=None)
-        # Store role names in lowercase for case-insensitive comparison
-        member_role_names = {role.name.lower() for role in member.roles}
-
+        # The view is now static and doesn't need to know the member's roles on creation.
         for game in GAME_LIMITS.keys():
-            # Compare game name (already lowercase) with member's roles (also lowercase)
-            has_role = game in member_role_names
-            self.add_item(RoleButton(game_name=game, has_role=has_role))
+            self.add_item(RoleButton(game_name=game))
 
 @bot.command(name="gameroles", help="Displays an interactive embed for self-assigning game roles.")
 async def gameroles(ctx):
@@ -2699,7 +2692,7 @@ async def gameroles(ctx):
     )
     embed.set_footer(text="Your roles will be updated automatically.")
     
-    view = RoleButtonView(ctx.author)
+    view = RoleButtonView()
     # Send as an ephemeral message so it's only visible to the user
     await ctx.send(embed=embed, view=view, ephemeral=True)
 
