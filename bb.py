@@ -2708,7 +2708,8 @@ class LobbyView(discord.ui.View):
         self.started = False
 
         # Dynamically add the 'Start Early' button
-        self.start_early_button = discord.ui.button(label="Start Early", style=discord.ButtonStyle.primary, emoji="🚀", custom_id="start_early", disabled=True)(self.start_early_callback)
+        self.start_early_button = discord.ui.Button(label="Start Early", style=discord.ButtonStyle.primary, emoji="🚀", custom_id="start_early", disabled=True)
+        self.start_early_button.callback = self.start_early_callback
         self.add_item(self.start_early_button)
 
     async def update_embed(self, interaction: discord.Interaction):
