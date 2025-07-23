@@ -2753,12 +2753,14 @@ class LobbyView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, emoji="✅")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user in self.players:
-            return await interaction.response.send_message("You are already in the lobby.", ephemeral=True)
-        if len(self.players) >= self.limit:
-            return await interaction.response.send_message("This lobby is full.", ephemeral=True)
-
+        # Defer immediately to prevent interaction timeouts.
         await interaction.response.defer()
+
+        if interaction.user in self.players:
+            return await interaction.followup.send("You are already in the lobby.", ephemeral=True)
+        if len(self.players) >= self.limit:
+            return await interaction.followup.send("This lobby is full.", ephemeral=True)
+
         self.players.append(interaction.user)
         if interaction.user.voice:
             # Retry logic for moving user
@@ -2782,12 +2784,16 @@ class LobbyView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, emoji="❌")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user not in self.players:
-            return await interaction.response.send_message("You are not in this lobby.", ephemeral=True)
-        if interaction.user == self.author:
-            return await interaction.response.send_message("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
-
+        # Defer the interaction immediately to prevent timeouts.
+        # We are not sending an initial ephemeral response, so we can defer without it.
         await interaction.response.defer()
+
+        if interaction.user not in self.players:
+            # Use followup.send for ephemeral messages after deferring.
+            return await interaction.followup.send("You are not in this lobby.", ephemeral=True)
+        if interaction.user == self.author:
+            return await interaction.followup.send("The lobby creator cannot leave. Use Cancel instead.", ephemeral=True)
+
         self.players.remove(interaction.user)
         if interaction.user.voice and interaction.user.voice.channel == self.vc:
             try:
@@ -2795,6 +2801,7 @@ class LobbyView(discord.ui.View):
             except (discord.Forbidden, discord.HTTPException):
                 await interaction.followup.send("I couldn't remove you from the VC. Please disconnect manually.", ephemeral=True)
 
+        # Correctly call update_embed with the original interaction to edit the message.
         await self.update_embed(interaction)
 
     async def start_early_callback(self, interaction: discord.Interaction):
