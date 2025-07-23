@@ -2611,8 +2611,13 @@ class MatchView(discord.ui.View):
 
 GAME_LIMITS = {
     "valorant": 5,
-    "peak": 2,
-    "repo": 4
+    "peak": 4,
+    "repo": 6,
+    "brawlhalla": 8,
+    "counter-strike 2": 5,
+    "league of legends": 5,
+    "apex legends": 3,
+    "osu": 16
 }
 
 class LobbyView(discord.ui.View):
@@ -2745,7 +2750,19 @@ async def match(ctx, game: str):
     )
     embed.set_footer(text=f"Lobby created by {ctx.author.display_name}")
     
-    message = await ctx.send(embed=embed, view=view)
+    # Role Pinging
+    ping_messages = []
+    looking_to_play_role = discord.utils.get(ctx.guild.roles, name="Looking to Play")
+    if looking_to_play_role:
+        ping_messages.append(looking_to_play_role.mention)
+
+    game_role = discord.utils.get(ctx.guild.roles, name=game_name.capitalize())
+    if game_role:
+        ping_messages.append(game_role.mention)
+
+    ping_content = " ".join(ping_messages) if ping_messages else None
+
+    message = await ctx.send(content=ping_content, embed=embed, view=view)
     view.message = message
 
 @bot.command(name="helpme")
