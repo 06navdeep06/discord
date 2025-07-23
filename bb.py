@@ -610,10 +610,10 @@ async def on_member_join(member):
                 f"Welcome, {member.mention}! Don't feed the vampires after midnight. 🧛‍♂️"
             ]
             greeting_messages = [
-                f"Namaste {member.mention}! Timi ta greeting nai ho username ma! Server ma swagat cha! 🙏",
-                f"Hello {member.mention}! Tero naam nai greeting ho, server ko mood ramro banau!",
-                f"Heyyy {member.mention}! Username ma greeting, server ma energy! Welcome!",
-                f"Yo {member.mention}! Username ma greeting, server ma roasting! Aaija!"
+                f"Well, look at you, {member.mention}! Your name is a greeting all by itself. Welcome to the server! 🎉",
+                f"Hello {member.mention}! With a name like that, you're already bringing good vibes. Glad to have you!",
+                f"Heyyy {member.mention}! A name that says hello? You're my kind of people. Welcome!",
+                f"Yo {member.mention}! Your username is basically a welcome mat. Come on in!"
             ]
             if is_greeting:
                 welcome_text = random.choice(greeting_messages)
