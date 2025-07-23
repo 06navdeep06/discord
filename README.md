@@ -160,4 +160,4 @@ This ensures that your configurations and user data are not lost when the bot re
 
 ## License
 
-This project is currently unlicensed. We recommend adding an [MIT License](https://opensource.org/licenses/MIT) by creating a `LICENSE` file with the appropriate text.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
