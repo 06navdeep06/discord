@@ -492,7 +492,7 @@ def get_system_prompt_with_timezone_and_duration(guild_id):
         f"\nThe conversation has been going for {str(duration).split('.')[0]}."
     )
 
-async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = None, history: Optional[list] = None, system_prompt: str = system_prompt) -> Optional[str]:
+async def fetch_llama4_response(prompt: str, user: Optional[discord.Member] = None, history: Optional[list] = None, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> Optional[str]:
     if not FIREWORKS_API_KEY:
         logger.error("No FIREWORKS_API_KEY set!")
         return None
