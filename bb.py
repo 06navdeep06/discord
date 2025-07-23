@@ -2663,10 +2663,8 @@ class RoleButton(discord.ui.Button):
         try:
             if role in member.roles:
                 await member.remove_roles(role, reason="Toggled off via button")
-                await interaction.followup.send(f"❌ Role '{role_name}' removed.", ephemeral=True)
             else:
                 await member.add_roles(role, reason="Toggled on via button")
-                await interaction.followup.send(f"✅ Role '{role_name}' added.", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send("❌ I can't modify your roles. Please check my role is above the game roles and that I have the 'Manage Roles' permission.", ephemeral=True)
             return
