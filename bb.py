@@ -2650,9 +2650,12 @@ class RoleButton(discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         member = interaction.user
         guild = interaction.guild
+        # Role names should be case-insensitive for matching but created with capitalization
         role_name = self.game_name.capitalize()
 
+        # Find the role case-insensitively
         role = discord.utils.get(guild.roles, name=role_name)
+
         if not role:
             try:
                 role = await guild.create_role(name=role_name, reason="Auto-created game role")
@@ -2663,23 +2666,27 @@ class RoleButton(discord.ui.Button):
         try:
             if role in member.roles:
                 await member.remove_roles(role, reason="Toggled off via button")
+                await interaction.followup.send(f"❌ Role '{role_name}' removed.", ephemeral=True)
             else:
                 await member.add_roles(role, reason="Toggled on via button")
+                await interaction.followup.send(f"✅ Role '{role_name}' added.", ephemeral=True)
         except discord.Forbidden:
             await interaction.followup.send("❌ I can't modify your roles. Please check my role is above the game roles and that I have the 'Manage Roles' permission.", ephemeral=True)
             return
 
-        # Re-create the view to update the buttons for the user
+        # Re-create the view to update the buttons for the user who interacted
         view = RoleButtonView(member)
-        await interaction.message.edit(view=view)
+        await interaction.edit_original_response(view=view)
 
 class RoleButtonView(discord.ui.View):
     def __init__(self, member: discord.Member):
         super().__init__(timeout=None)
+        # Store role names in lowercase for case-insensitive comparison
         member_role_names = {role.name.lower() for role in member.roles}
 
         for game in GAME_LIMITS.keys():
-            has_role = game.capitalize().lower() in member_role_names
+            # Compare game name (already lowercase) with member's roles (also lowercase)
+            has_role = game in member_role_names
             self.add_item(RoleButton(game_name=game, has_role=has_role))
 
 @bot.command(name="gameroles", help="Displays an interactive embed for self-assigning game roles.")
@@ -2693,7 +2700,8 @@ async def gameroles(ctx):
     embed.set_footer(text="Your roles will be updated automatically.")
     
     view = RoleButtonView(ctx.author)
-    await ctx.send(embed=embed, view=view)
+    # Send as an ephemeral message so it's only visible to the user
+    await ctx.send(embed=embed, view=view, ephemeral=True)
 
 class LobbyView(discord.ui.View):
     def __init__(self, author, game, vc):
