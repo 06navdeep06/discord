@@ -2636,15 +2636,18 @@ GAME_LIMITS = {
 
 class RoleButton(discord.ui.Button):
     def __init__(self, game_name: str, has_role: bool):
+        style = discord.ButtonStyle.success if has_role else discord.ButtonStyle.secondary
+        emoji = "✅" if has_role else "❌"
         super().__init__(
             label=game_name.capitalize(),
-            style=discord.ButtonStyle.success if has_role else discord.ButtonStyle.secondary,
+            style=style,
+            emoji=emoji,
             custom_id=f"role_button_{game_name}"
         )
         self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         member = interaction.user
         guild = interaction.guild
         role_name = self.game_name.capitalize()
@@ -2657,15 +2660,20 @@ class RoleButton(discord.ui.Button):
                 await interaction.followup.send("I lack permissions to create roles.", ephemeral=True)
                 return
 
-        if role in member.roles:
-            await member.remove_roles(role, reason="Toggled off via button")
-            await interaction.followup.send(f"❌ Role '{role_name}' removed.", ephemeral=True)
-        else:
-            await member.add_roles(role, reason="Toggled on via button")
-            await interaction.followup.send(f"✅ Role '{role_name}' added.", ephemeral=True)
+        try:
+            if role in member.roles:
+                await member.remove_roles(role, reason="Toggled off via button")
+                await interaction.followup.send(f"❌ Role '{role_name}' removed.", ephemeral=True)
+            else:
+                await member.add_roles(role, reason="Toggled on via button")
+                await interaction.followup.send(f"✅ Role '{role_name}' added.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("❌ I can't modify your roles. Please check my role is above the game roles and that I have the 'Manage Roles' permission.", ephemeral=True)
+            return
 
-        # Refresh the view with updated button styles
-        await interaction.edit_original_response(view=RoleButtonView(member))
+        # Re-create the view to update the buttons for the user
+        view = RoleButtonView(member)
+        await interaction.message.edit(view=view)
 
 class RoleButtonView(discord.ui.View):
     def __init__(self, member: discord.Member):
@@ -2675,6 +2683,19 @@ class RoleButtonView(discord.ui.View):
         for game in GAME_LIMITS.keys():
             has_role = game.capitalize().lower() in member_role_names
             self.add_item(RoleButton(game_name=game, has_role=has_role))
+
+@bot.command(name="gameroles", help="Displays an interactive embed for self-assigning game roles.")
+async def gameroles(ctx):
+    """Sends a message with buttons for self-assigning game roles."""
+    embed = discord.Embed(
+        title="🎮 Game Role Assignment",
+        description="Click the buttons below to get roles for the games you play. This helps others find teammates!",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="Your roles will be updated automatically.")
+    
+    view = RoleButtonView(ctx.author)
+    await ctx.send(embed=embed, view=view)
 
 class LobbyView(discord.ui.View):
     def __init__(self, author, game, vc):
@@ -2706,12 +2727,27 @@ class LobbyView(discord.ui.View):
 
         self.players.append(interaction.user)
         if interaction.user.voice:
-            try:
-                await interaction.user.move_to(self.vc)
-            except (discord.Forbidden, discord.HTTPException):
-                # This can fail if the bot lacks permissions or the user isn't in a VC.
-                # We'll notify them ephemerally if it fails.
-                await interaction.followup.send("I couldn't move you to the voice channel. Please check my permissions.", ephemeral=True)
+            moved = False
+            for attempt in range(3):
+                try:
+                    await interaction.user.move_to(self.vc)
+                    moved = True
+                    break
+                except discord.DiscordServerError:
+                    await asyncio.sleep(1 + attempt) # Exponential backoff
+                except (discord.Forbidden, discord.HTTPException):
+                    # Permissions error, no point in retrying
+                    break
+
+            if not moved:
+                for attempt in range(3):
+                    try:
+                        await interaction.followup.send("I couldn't move you to the voice channel. Please check my permissions.", ephemeral=True)
+                        break
+                    except discord.DiscordServerError:
+                        await asyncio.sleep(1 + attempt)
+                    except discord.HTTPException:
+                        break
 
         await self.update_embed(interaction)
 
