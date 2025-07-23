@@ -779,7 +779,10 @@ async def on_error(event, *args, **kwargs):
 async def on_command_error(ctx, error):
     """Handle command errors"""
     if isinstance(error, commands.CommandNotFound):
-        await ctx.send(f"❌ Command not found! Use `!helpme` to see available commands.")
+        try:
+            await ctx.send(f"❌ Command not found! Use `!helpme` to see available commands.")
+        except discord.DiscordServerError as e:
+            logger.warning(f"Could not send CommandNotFound error message: {e}")
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send(f"❌ You don't have permission to use this command!")
     elif isinstance(error, commands.MissingRequiredArgument):
@@ -1640,7 +1643,11 @@ async def check_warnings(ctx):
                     inline=False)
     embed.set_footer(text="Next @everyone from these users = 24h timeout")
 
-    await ctx.send(embed=embed)
+    try:
+        await ctx.send(embed=embed)
+    except discord.DiscordServerError as e:
+        await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+        logger.warning(f"Discord server error on ctx.send in check_warnings: {e}")
 
 
 @bot.command(name="clearwarnings")
@@ -1676,7 +1683,11 @@ async def kick_member(ctx, member: discord.Member, *, reason="No reason provided
         embed.add_field(name="Kicked by", value=ctx.author.mention, inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.timestamp = discord.utils.utcnow()
-        await ctx.send(embed=embed)
+        try:
+            await ctx.send(embed=embed)
+        except discord.DiscordServerError as e:
+            await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+            logger.warning(f"Discord server error on ctx.send in kick_member: {e}")
         
         # Log to moderation channel
         mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
@@ -1703,7 +1714,11 @@ async def ban_member(ctx, member: discord.Member, *, reason="No reason provided"
         embed.add_field(name="Banned by", value=ctx.author.mention, inline=True)
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.timestamp = discord.utils.utcnow()
-        await ctx.send(embed=embed)
+        try:
+            await ctx.send(embed=embed)
+        except discord.DiscordServerError as e:
+            await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+            logger.warning(f"Discord server error on ctx.send in ban_member: {e}")
         
         # Log to moderation channel
         mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
@@ -4305,6 +4320,28 @@ async def reset_voice_activity_weekly() -> None:
         voice_activity_weekly.clear()
         save_all_data()
         logger.info("Reset weekly voice activity and awarded champion role.")
+
+@bot.event
+async def on_command_error(ctx, error):
+    """The event triggered when an error is raised while invoking a command."""
+    if isinstance(error, commands.CommandNotFound):
+        return  # Ignore commands that don't exist
+
+    if isinstance(error, discord.errors.DiscordServerError):
+        try:
+            await ctx.send("ðŸ”¬ Discord is having some issues right now. Please try again in a moment.")
+        except Exception as e:
+            logger.error(f"Failed to send DiscordServerError message: {e}")
+        logger.error(f"Discord Server Error: {error}")
+        return
+
+    # For other errors, log them and notify the user
+    logger.error(f'Ignoring exception in command {ctx.command}:')
+    logger.error(traceback.format_exc())
+    try:
+        await ctx.send(f"ðŸ˜” An unexpected error occurred. Please check the logs.")
+    except Exception as e:
+        logger.error(f"Failed to send generic error message: {e}")
 
 token = os.getenv("TOKEN")
 if not token:
