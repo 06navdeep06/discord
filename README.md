@@ -2,17 +2,6 @@
 
 Miku is a powerful, multi-purpose Discord bot designed to bring life and order to your server. Packed with features ranging from intelligent AI chat and robust moderation tools to dynamic voice channel management and engaging commands, Miku is the only bot you'll need. It's built to be highly configurable, with per-server settings for timezones, channels, and more, ensuring a tailored experience for your community.
 
-## Key Features
-
-- **💬 AI-Powered Chat**: Engage with a context-aware AI that understands your server's conversations. Powered by Fireworks Llama 4, Miku can switch between different personalities, from a helpful assistant to a sassy companion.
-- **🎙️ Dynamic Voice Channels**: Miku automatically creates and deletes voice channels based on user activity. Set up templates for duos, trios, squads, and teams, and watch the bot manage the rest.
-- **🛡️ Advanced Moderation**: Keep your server safe with a full suite of moderation commands, including kick, ban, mute, and warn. The bot also features auto-moderation to handle spam, excessive caps, and banned words.
-- **🎉 Fun & Games**: Liven up your server with commands like `!poll`, `!8ball`, `!coinflip`, and `!dice`.
-- **🛠️ Utility Belt**: A range of tools at your disposal, from setting reminders (`!remind`) to checking server statistics (`!serverinfo`) and user profiles (`!userinfo`).
-- **🌍 Timezone Aware**: Configure the bot to your server's local timezone for accurate timestamps and scheduling. Miku can even determine the correct timezone from a country name.
-- **🎵 Music Integration**: Play music from YouTube and Spotify with a full-featured music player, including queue management and playlist support.
-- **💾 Data Persistence**: Miku uses MongoDB to save server settings, user warnings, activity stats, and more, ensuring your data is safe across bot restarts.
-
 ## Prerequisites
 
 Before you begin, ensure you have the following:
