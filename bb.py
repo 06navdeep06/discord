@@ -4304,6 +4304,158 @@ class YTDLSource(discord.PCMVolumeTransformer):
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
+
+async def play_next(ctx):
+    """Play the next track in the queue for the guild."""
+    guild_id = ctx.guild.id
+    if guild_id in music_queues and music_queues[guild_id]:
+        track = music_queues[guild_id].pop(0)
+        source = await YTDLSource.from_url(track['url'], loop=bot.loop, stream=True)
+        if source is None:
+            await ctx.send("⚠️ Failed to load the next track. Skipping...")
+            await play_next(ctx)
+            return
+        now_playing[guild_id] = {'title': source.title, 'url': track['url']}
+        ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
+        await ctx.send(f"🎶 Now playing: **{source.title}**")
+    else:
+        now_playing.pop(guild_id, None)
+
+
+@bot.command(name="join")
+async def join(ctx):
+    """Join the user's voice channel."""
+    if not ctx.author.voice:
+        return await ctx.send("❌ You need to be in a voice channel first!")
+    channel = ctx.author.voice.channel
+    if ctx.voice_client:
+        await ctx.voice_client.move_to(channel)
+    else:
+        await channel.connect()
+    await ctx.send(f"🔊 Joined **{channel.name}**")
+
+
+@bot.command(name="leave")
+async def leave(ctx):
+    """Leave the voice channel."""
+    if not ctx.voice_client:
+        return await ctx.send("❌ I'm not in a voice channel!")
+    guild_id = ctx.guild.id
+    music_queues.pop(guild_id, None)
+    now_playing.pop(guild_id, None)
+    await ctx.voice_client.disconnect()
+    await ctx.send("👋 Left the voice channel.")
+
+
+@bot.command(name="play")
+async def play(ctx, *, query: str):
+    """Play a song from YouTube (URL or search query)."""
+    # Join voice channel if not already connected
+    if not ctx.author.voice:
+        return await ctx.send("❌ You need to be in a voice channel first!")
+    if not ctx.voice_client:
+        await ctx.author.voice.channel.connect()
+
+    async with ctx.typing():
+        source = await YTDLSource.from_url(query, loop=bot.loop, stream=True)
+        if source is None:
+            return await ctx.send("❌ Could not find or play that track.")
+
+    guild_id = ctx.guild.id
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        # Add to queue
+        if guild_id not in music_queues:
+            music_queues[guild_id] = []
+        music_queues[guild_id].append({'title': source.title, 'url': query})
+        await ctx.send(f"📋 Added to queue: **{source.title}** (Position #{len(music_queues[guild_id])})")
+    else:
+        now_playing[guild_id] = {'title': source.title, 'url': query}
+        ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
+        await ctx.send(f"🎶 Now playing: **{source.title}**")
+
+
+@bot.command(name="skip")
+async def skip(ctx):
+    """Skip the current song."""
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        return await ctx.send("❌ Nothing is playing right now!")
+    ctx.voice_client.stop()  # Triggers the `after` callback which plays next
+    await ctx.send("⏭️ Skipped!")
+
+
+@bot.command(name="queue")
+async def queue(ctx):
+    """Show the current music queue."""
+    guild_id = ctx.guild.id
+    current = now_playing.get(guild_id)
+    q = music_queues.get(guild_id, [])
+
+    if not current and not q:
+        return await ctx.send("📋 The queue is empty.")
+
+    embed = discord.Embed(title="🎵 Music Queue", color=0xe91e63)
+    if current:
+        embed.add_field(name="Now Playing", value=f"**{current['title']}**", inline=False)
+    if q:
+        queue_list = "\n".join(f"`{i+1}.` {t['title']}" for i, t in enumerate(q[:15]))
+        if len(q) > 15:
+            queue_list += f"\n... and {len(q) - 15} more"
+        embed.add_field(name="Up Next", value=queue_list, inline=False)
+    embed.set_footer(text=f"{len(q)} track(s) in queue")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="np")
+async def np(ctx):
+    """Show the currently playing song."""
+    guild_id = ctx.guild.id
+    current = now_playing.get(guild_id)
+    if not current:
+        return await ctx.send("❌ Nothing is playing right now!")
+    await ctx.send(f"🎶 Now playing: **{current['title']}**")
+
+
+@bot.command(name="stop")
+async def stop(ctx):
+    """Stop playback and clear the queue."""
+    if not ctx.voice_client:
+        return await ctx.send("❌ I'm not in a voice channel!")
+    guild_id = ctx.guild.id
+    music_queues.pop(guild_id, None)
+    now_playing.pop(guild_id, None)
+    ctx.voice_client.stop()
+    await ctx.send("⏹️ Stopped playback and cleared the queue.")
+
+
+@bot.command(name="pause")
+async def pause(ctx):
+    """Pause the current song."""
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        return await ctx.send("❌ Nothing is playing right now!")
+    ctx.voice_client.pause()
+    await ctx.send("⏸️ Paused.")
+
+
+@bot.command(name="resume")
+async def resume(ctx):
+    """Resume the paused song."""
+    if not ctx.voice_client or not ctx.voice_client.is_paused():
+        return await ctx.send("❌ Nothing is paused right now!")
+    ctx.voice_client.resume()
+    await ctx.send("▶️ Resumed.")
+
+
+@bot.command(name="volume")
+async def volume(ctx, vol: int):
+    """Set the playback volume (0-100)."""
+    if not ctx.voice_client or not ctx.voice_client.source:
+        return await ctx.send("❌ Nothing is playing right now!")
+    if not 0 <= vol <= 100:
+        return await ctx.send("❌ Volume must be between 0 and 100.")
+    ctx.voice_client.source.volume = vol / 100
+    await ctx.send(f"🔊 Volume set to **{vol}%**")
+
+
 def get_weekday_index():
     return datetime.datetime.now().weekday()
 
