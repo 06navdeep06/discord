@@ -1,66 +1,56 @@
 # =========================================
-from dotenv import load_dotenv
-load_dotenv()
-
-voice_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
-chat_activity_weekly = {}  # {guild_id: {user_id: [day0, ..., day6]}}
-
-chat_message_timestamps = {}  # {guild_id: {user_id: [timestamps]}}
-
-# Discord Bot: Multi-Feature Server Manager
-# -----------------------------------------
-# This bot manages voice channels, moderation,
-# AI chat, fun commands, and more for Discord servers.
-# It uses MongoDB for data persistence and supports
-# per-guild (server) settings.
+# Miku Bot - Discord Server Manager
+# Voice channels, moderation, AI chat, music, and more.
+# MongoDB for persistence, per-guild settings.
 # =========================================
 
 from dotenv import load_dotenv
+load_dotenv()
 
-# --- Imports ---
-import discord  # Discord API wrapper
+import discord
 import datetime
-from discord.ext import commands  # For command-based bots
-import asyncio  # For asynchronous programming (needed for Discord bots)
-import os  # For environment variables (API keys, tokens)
-import logging  # For logging errors and info
-from datetime import timedelta  # For time calculations
-import random  # For random choices (e.g., GIFs, responses)
-import re  # For regular expressions (pattern matching)
-from collections import defaultdict, deque  # For advanced data structures
-import time  # For timestamps and timing
-import requests  # For making HTTP requests (e.g., Wikipedia API)
-from urllib.parse import quote  # For URL encoding
-import json  # For working with JSON data (e.g., Google AI API)
+import datetime as dt
+from discord.ext import commands, tasks
+import asyncio
+import os
+import logging
+from datetime import timedelta, timezone
+import random
+import re
+from collections import defaultdict, deque
+import time
+import requests
+from urllib.parse import quote
+import json
+import ast
+from typing import Optional
+import aiohttp
+import math
+import platform
+import psutil
+import traceback
+from io import BytesIO
+import pytz
+import yt_dlp
+
 try:
-    from pymongo import MongoClient  # For MongoDB database connection
+    from pymongo import MongoClient
 except ImportError:
     MongoClient = None
     print("Warning: pymongo not installed. Database features will be disabled.")
-from typing import Optional  # For type hints
-import aiohttp  # For asynchronous HTTP requests
-import datetime as dt  # For date and time operations
-import math  # For math operations
-import platform  # For system info
-import psutil  # For system resource usage
-import traceback  # For error tracebacks
-from io import BytesIO  # For in-memory file operations
-import pytz  # For timezone support
+
 try:
-    from countryinfo import CountryInfo  # For mapping country to timezone
+    from countryinfo import CountryInfo
 except ImportError:
     CountryInfo = None
     print("Warning: countryinfo not installed. Country to timezone features will be disabled.")
-import yt_dlp  # For downloading/streaming YouTube audio
+
 try:
-    import spotipy  # For Spotify API
+    import spotipy
     from spotipy.oauth2 import SpotifyClientCredentials
 except ImportError:
     spotipy = None
     SpotifyClientCredentials = None
-from datetime import timezone  # For UTC timezone
-from dotenv import load_dotenv
-load_dotenv()
 
 # --- Spotify client initialization ---
 # If Spotify credentials are set, initialize the Spotify API client
@@ -246,11 +236,6 @@ async def get_recent_channel_history(channel: discord.TextChannel, bot_user: dis
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Discord Bot Intents ---
-# Intents control which events the bot receives from Discord
-from discord.ext import tasks
-import datetime
-
 intents = discord.Intents.default()
 intents.voice_states = True
 intents.guilds = True
@@ -277,6 +262,16 @@ TEMPLATE_CHANNELS = {
         "limit": 12
     },
 }
+
+def get_template_channels(guild_id):
+    """Get template channels for a guild, using per-guild settings if available."""
+    settings = get_guild_settings(guild_id)
+    return {
+        "Duo": {"id": settings.get("duo_channel_id", TEMPLATE_CHANNELS["Duo"]["id"]), "limit": 2},
+        "Trio": {"id": settings.get("trio_channel_id", TEMPLATE_CHANNELS["Trio"]["id"]), "limit": 3},
+        "Squad": {"id": settings.get("squad_channel_id", TEMPLATE_CHANNELS["Squad"]["id"]), "limit": 4},
+        "Team": {"id": settings.get("team_channel_id", TEMPLATE_CHANNELS["Team"]["id"]), "limit": 12},
+    }
 
 # Welcome channel ID
 WELCOME_CHANNEL_ID = 1391641782487617696
@@ -776,10 +771,7 @@ async def on_error(event, *args, **kwargs):
 async def on_command_error(ctx, error):
     """Handle command errors"""
     if isinstance(error, commands.CommandNotFound):
-        try:
-            await ctx.send(f"❌ Command not found! Use `!helpme` to see available commands.")
-        except discord.DiscordServerError as e:
-            logger.warning(f"Could not send CommandNotFound error message: {e}")
+        return  # don't spam chat for typos
     elif isinstance(error, commands.MissingPermissions):
         await ctx.send(f"❌ You don't have permission to use this command!")
     elif isinstance(error, commands.MissingRequiredArgument):
@@ -1025,76 +1017,20 @@ async def auto_moderate(message: discord.Message):
         logger.error(f"Error in auto-moderation: {e}")
 
 
-@bot.command(name="set_personality")
-@commands.has_permissions(administrator=True)
-async def set_personality(ctx, *, personality: str):
-    """Overwrites the AI's current personality with a new one."""
-    if db is None:
-        await ctx.send("Database is not connected. Cannot set personality.")
-        return
-    set_guild_setting(ctx.guild.id, "system_prompt", personality)
-    await ctx.send(f'✅ AI personality has been set to: "{personality}"')
-
-@bot.command(name="add_personality")
-@commands.has_permissions(administrator=True)
-async def add_personality(ctx, *, trait: str):
-    """Adds a new trait to the AI's existing personality."""
-    if db is None:
-        await ctx.send("Database is not connected. Cannot add personality trait.")
-        return
-    
-    current_personality = get_system_prompt(ctx.guild.id)
-    # If it's the default prompt, start fresh rather than appending to it
-    if current_personality == DEFAULT_SYSTEM_PROMPT:
-        current_personality = ""
-
-    new_personality = (current_personality + " " + trait).strip()
-    set_guild_setting(ctx.guild.id, "system_prompt", new_personality)
-    await ctx.send(f'✅ New trait added! The personality is now: "{new_personality}"')
-
-@bot.command(name="view_personality")
-async def view_personality(ctx):
-    """Displays the AI's current personality for the server."""
-    if db is None:
-        await ctx.send("Database is not connected. Cannot view personality.")
-        return
-    current_personality = get_system_prompt(ctx.guild.id)
-    await ctx.send(f"""**Current AI Personality:**
-```
-{current_personality}
-```""")
-
-@bot.command(name="reset_personality")
-@commands.has_permissions(administrator=True)
-async def reset_personality(ctx):
-    """Resets the AI's personality to its default settings."""
-    if db is None:
-        await ctx.send("Database is not connected. Cannot reset personality.")
-        return
-    set_guild_setting(ctx.guild.id, "system_prompt", DEFAULT_SYSTEM_PROMPT)
-    await ctx.send("✅ AI personality has been reset to the default.")
-
 @bot.event
 async def on_message(message):
     try:
-        # Safe channel name for logging
-        channel_info = getattr(message.channel, 'name', None)
-        if not channel_info:
-            channel_info = f"{type(message.channel).__name__} (ID: {getattr(message.channel, 'id', 'N/A')})"
-        logger.info(f"Processing message from {message.author.display_name} in {channel_info}")
-
         if message.author == bot.user:
-            return  # Ignore messages from the bot itself
+            return
 
         if isinstance(message.channel, discord.DMChannel):
             await handle_dm_reply(message)
             return
 
-        # Get guild-specific settings
         settings = get_guild_settings(message.guild.id)
         ai_channel_id = settings.get("ai_channel_id")
 
-        # AI response logic
+        # AI response in designated channel or when mentioned
         is_ai_channel = ai_channel_id and message.channel.id == ai_channel_id
         is_mention = bot.user.mentioned_in(message) and not message.mention_everyone
 
@@ -1108,13 +1044,9 @@ async def on_message(message):
                 await message.reply("Sorry, I couldn't generate a response.")
             return
 
-        # Process commands
-        await bot.process_commands(message)
-
-        # Auto-moderation and keyword responses
-        await auto_moderate(message)
-        
+        # Keyword auto-responses (before process_commands so they fire on non-command messages)
         message_lower = message.content.lower()
+
         if 'deadshot' in message_lower:
             response = "Oi rando, talai muji deadshot sanga love paryo ki kya ho? gay chakka randi berojgar"
             gif_url = random.choice(MIKU_GIFS)
@@ -1141,115 +1073,71 @@ async def on_message(message):
 
         if 'peak' in message_lower and '?' in message_lower:
             await message.channel.send('https://discord.gg/peak')
+            return
         elif 'valorant' in message_lower and '?' in message_lower:
             await message.channel.send('https://discord.gg/valorant')
+            return
 
-    except Exception as e:
-        logger.error(f"Error in on_message: {e}")
-        logger.error(f"on_message traceback: {traceback.format_exc()}")
-
-        # Check for specific keywords
-        message_lower = message.content.lower()
-
-        # Check for "deadshot"
-        if "deadshot" in message_lower:
-            response = "Oi rando, talai muji deadshot sanga love paryo ki kya ho? gay chakka randi berojgar"
-            gif_url = random.choice(MIKU_GIFS)
-            embed = discord.Embed(description=response, color=0xff1744)
-            embed.set_image(url=gif_url)
-            await message.reply(embed=embed)
-            return  # <--- Ensure we return after replying
-
-        # Check for "oj" or "OJ"
-        if re.search(r'\boj\b', message_lower) or re.search(
-                r'\bOJ\b', message.content):
-            response = "OJ chakka sanga kura na gar"
-            gif_url = random.choice(MIKU_GIFS)
-            embed = discord.Embed(description=response, color=0xff1744)
-            embed.set_image(url=gif_url)
-            await message.reply(embed=embed)
-            return  # <--- Ensure we return after replying
-
-        # Check for "REI" or "Rei"
-        if "rei" in message_lower:
-            response = "I love my darling @Rei. He's so much bigger than my black femboy <3. "
-            gif_url = random.choice(HREI_GIFS)
-            embed = discord.Embed(description=response, color=0xff1744)
-            embed.set_image(url=gif_url)
-            await message.reply(embed=embed)
-            return  # <--- Ensure we return after replying
-
-        if "@everyone" in message.content:
+        # @everyone abuse protection
+        if "@everyone" in message.content and not message.author.guild_permissions.mention_everyone:
             user_id = str(message.author.id)
-
             if user_id in everyone_warnings:
-                # Timeout the user for 1 day
                 timeout_duration = timedelta(days=1)
-                await message.author.timeout(
-                    timeout_duration, reason="@everyone usage after warning")
+                await message.author.timeout(timeout_duration, reason="@everyone usage after warning")
                 await message.channel.send(
                     f"{message.author.mention} has been timed out for 1 day due to repeated @everyone usage."
                 )
-                del everyone_warnings[user_id]  # Clear warning after timeout
+                del everyone_warnings[user_id]
             else:
-                # Give the user a warning
                 everyone_warnings[user_id] = discord.utils.utcnow()
                 await message.channel.send(
                     f"TAG NA GAR MUJI, MUTE KHANCHAS - {message.author.mention} - Do not use everyone unless absolutely necessary! Next time will result in a 24h timeout."
                 )
-
             save_all_data()
-            return  # <--- Ensure we return after replying
+            return
 
         # Mention spam protection
         now_ts = discord.utils.utcnow().timestamp()
         for mentioned in message.mentions:
-            # Check if the mention is explicit in the message content (not just a reply)
             mention_patterns = [f"<@{mentioned.id}>", f"<@!{mentioned.id}>"]
             explicit_mention = any(pattern in message.content for pattern in mention_patterns)
             if not explicit_mention:
-                continue  # Skip if not an explicit @user_id tag
+                continue
             key = (message.author.id, mentioned.id)
             dq = mention_spam_tracker[key]
             dq.append(now_ts)
-            # Remove old timestamps
             while dq and now_ts - dq[0] > MENTION_SPAM_WINDOW:
                 dq.popleft()
             if len(dq) >= MENTION_SPAM_THRESHOLD:
                 if key not in mention_spam_warnings:
                     mention_spam_warnings[key] = now_ts
-                    await message.channel.send(f"⚠️ {message.author.mention}, stop spamming mentions to {mentioned.mention}! Next time you'll be timed out.")
+                    await message.channel.send(f"⚠\ufe0f {message.author.mention}, stop spamming mentions to {mentioned.mention}! Next time you'll be timed out.")
                 else:
-                    # Timeout user
                     try:
                         await message.author.timeout(
                             timedelta(seconds=MENTION_TIMEOUT_DURATION),
                             reason="Mention spam (auto timeout by bot)"
                         )
-                        await message.channel.send(f"⏰ {message.author.mention} has been timed out for mention spam {mentioned.mention}.")
+                        await message.channel.send(f"\u23f0 {message.author.mention} has been timed out for mention spam {mentioned.mention}.")
                     except Exception as e:
                         logger.error(f"Failed to timeout user for mention spam: {e}")
-                    # Reset tracker and warning
                     mention_spam_tracker[key].clear()
-                    if key in mention_spam_warnings:
-                        del mention_spam_warnings[key]
+                    mention_spam_warnings.pop(key, None)
+                save_all_data()
+                return
 
-            save_all_data()
-            return  # <--- Ensure we return after replying
-
-        # Only process commands if no custom reply was sent
+        # Process commands
         await bot.process_commands(message)
+
         # Track command usage
         if message.content.startswith("!"):
             server_stats["commands_used"] += 1
 
-        # --- In on_message, after confirming not a bot and in a guild ---
-        # (Move this code block inside the on_message event handler, after confirming not a bot and in a guild)
-        settings = get_guild_settings(message.guild.id)
-        ai_channel_id = settings.get("ai_channel_id")
-        # Exclude messages in AI/Miku channel
+        # Auto-moderation
+        await auto_moderate(message)
+
+        # Track chat activity (skip AI channel, bots, commands)
         if not (ai_channel_id and message.channel.id == ai_channel_id):
-            # Only count if not a bot and not a command
             if not message.author.bot and not message.content.startswith("!"):
                 guild_id = message.guild.id
                 user_id = str(message.author.id)
@@ -1263,9 +1151,10 @@ async def on_message(message):
                 if len(chat_message_timestamps[guild_id][user_id]) < 5:
                     update_weekly_chat_activity(guild_id, user_id)
                     chat_message_timestamps[guild_id][user_id].append(now)
+                server_stats["messages_today"] += 1
 
     except Exception as e:
-        logger.error(f"Error in message event: {e}")
+        logger.error(f"Error in on_message: {e}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
 
 
@@ -1692,7 +1581,7 @@ async def check_warnings(ctx):
     try:
         await ctx.send(embed=embed)
     except discord.DiscordServerError as e:
-        await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+        await ctx.send(f"Could not send message due to a Discord server error: {e}")
         logger.warning(f"Discord server error on ctx.send in check_warnings: {e}")
 
 
@@ -1732,7 +1621,7 @@ async def kick_member(ctx, member: discord.Member, *, reason="No reason provided
         try:
             await ctx.send(embed=embed)
         except discord.DiscordServerError as e:
-            await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+            await ctx.send(f"Could not send message due to a Discord server error: {e}")
             logger.warning(f"Discord server error on ctx.send in kick_member: {e}")
         
         # Log to moderation channel
@@ -1763,7 +1652,7 @@ async def ban_member(ctx, member: discord.Member, *, reason="No reason provided"
         try:
             await ctx.send(embed=embed)
         except discord.DiscordServerError as e:
-            await ctx.send(f"ðŸš¨ Could not send message due to a Discord server error: {e}")
+            await ctx.send(f"Could not send message due to a Discord server error: {e}")
             logger.warning(f"Discord server error on ctx.send in ban_member: {e}")
         
         # Log to moderation channel
@@ -2378,20 +2267,53 @@ async def avatar(ctx, member: discord.Member = None):
 @bot.command(name="roleinfo")
 async def role_info(ctx, role: discord.Role):
     """Display detailed role information"""
-    # Calculate member count
     member_count = len(role.members)
-    
-    # Get permissions
+
     permissions = []
     for perm, value in role.permissions:
         if value:
             permissions.append(perm.replace('_', ' ').title())
-    
+
     embed = discord.Embed(
-        title=f"🎭 {role.name}",
+        title=f"\ud83c\udfad {role.name}",
         description=role.mention,
         color=role.color if role.color != discord.Color.default() else 0x00ff00
     )
+
+    embed.add_field(
+        name="\ud83d\udcdd Basic Info",
+        value=f"**ID:** {role.id}\n**Position:** {role.position}\n**Members:** {member_count:,}",
+        inline=True
+    )
+    embed.add_field(
+        name="\ud83c\udfa8 Role Info",
+        value=f"**Color:** {str(role.color)}\n**Hoisted:** {'Yes' if role.hoist else 'No'}\n**Mentionable:** {'Yes' if role.mentionable else 'No'}",
+        inline=True
+    )
+    embed.add_field(
+        name="\ud83d\udcc5 Created",
+        value=discord.utils.format_dt(role.created_at, style='D'),
+        inline=True
+    )
+
+    if permissions:
+        perms_text = ", ".join(permissions[:10]) + ("..." if len(permissions) > 10 else "")
+        embed.add_field(
+            name=f"\ud83d\udd11 Permissions ({len(permissions)})",
+            value=perms_text,
+            inline=False
+        )
+
+    if 0 < member_count <= 20:
+        members_text = ", ".join([m.display_name for m in role.members[:10]])
+        if member_count > 10:
+            members_text += f" and {member_count - 10} more..."
+        embed.add_field(name="\ud83d\udc65 Members", value=members_text, inline=False)
+
+    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
+    embed.timestamp = discord.utils.utcnow()
+    await ctx.send(embed=embed)
+
 
 @bot.command(name="chatactivity", aliases=["chatleaderboard"])
 async def chat_activity_leaderboard(ctx):
@@ -2408,56 +2330,10 @@ async def chat_activity_leaderboard(ctx):
         name = member.display_name if member else f"User {user_id}"
         leaderboard += f"{i}. **{name}** - {total} messages\n"
     embed = discord.Embed(
-        title="💬 Weekly Chat Activity Leaderboard",
+        title="\ud83d\udcac Weekly Chat Activity Leaderboard",
         description=leaderboard or "No data.",
         color=0x3498db
     )
-    await ctx.send(embed=embed)
-    
-    # Basic info
-    embed.add_field(
-        name="📝 Basic Info",
-        value=f"**ID:** {role.id}\n**Position:** {role.position}\n**Members:** {member_count:,}",
-        inline=True
-    )
-    
-    # Role info
-    embed.add_field(
-        name="🎨 Role Info",
-        value=f"**Color:** {str(role.color)}\n**Hoisted:** {'Yes' if role.hoist else 'No'}\n**Mentionable:** {'Yes' if role.mentionable else 'No'}",
-        inline=True
-    )
-    
-    # Created info
-    embed.add_field(
-        name="📅 Created",
-        value=discord.utils.format_dt(role.created_at, style='D'),
-        inline=True
-    )
-    
-    # Permissions
-    if permissions:
-        perms_text = ", ".join(permissions[:10]) + ("..." if len(permissions) > 10 else "")
-        embed.add_field(
-            name=f"🔑 Permissions ({len(permissions)})",
-            value=perms_text,
-            inline=False
-        )
-    
-    # Members (if not too many)
-    if member_count <= 20 and member_count > 0:
-        members_text = ", ".join([member.display_name for member in role.members[:10]])
-        if member_count > 10:
-            members_text += f" and {member_count - 10} more..."
-        embed.add_field(
-            name="👥 Members",
-            value=members_text,
-            inline=False
-        )
-    
-    embed.set_footer(text=f"Requested by {ctx.author.display_name}")
-    embed.timestamp = discord.utils.utcnow()
-    
     await ctx.send(embed=embed)
 
 
@@ -2762,8 +2638,7 @@ async def gameroles(ctx):
     embed.set_footer(text="Your roles will be updated automatically.")
     
     view = RoleButtonView()
-    # Send as an ephemeral message so it's only visible to the user
-    await ctx.send(embed=embed, view=view, ephemeral=True)
+    await ctx.send(embed=embed, view=view)
 
 class LobbyView(discord.ui.View):
     def __init__(self, author, game, vc):
@@ -2801,24 +2676,6 @@ class LobbyView(discord.ui.View):
         self.start_early_button.disabled = not (interaction.user == self.author and len(self.players) > 1)
 
         await interaction.message.edit(embed=embed, view=self)
-
-    async def start_match(self, interaction: discord.Interaction):
-        """Locks the lobby and starts the match."""
-        if self.started:
-            return
-        self.started = True
-
-        # Disable all buttons
-        for item in self.children:
-            item.disabled = True
-
-        embed = interaction.message.embeds[0]
-        embed.title = f"🚀 Match Starting: {self.game.capitalize()} 🚀"
-        embed.color = discord.Color.gold()
-        embed.description = "The lobby is now locked. Good luck, have fun!"
-        await interaction.message.edit(embed=embed, view=self)
-        await interaction.followup.send("Match is starting!", ephemeral=True)
-        self.stop()
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, emoji="✅")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2905,10 +2762,14 @@ class LobbyView(discord.ui.View):
         self.stop()
 
     async def start_match(self, interaction: discord.Interaction):
+        if self.started:
+            return
+        self.started = True
+
         for child in self.children:
             child.disabled = True
-        
-        await self.vc.edit(name=f"✨ {self.game.capitalize()} Match")
+
+        await self.vc.edit(name=f"\u2728 {self.game.capitalize()} Match")
 
         embed = discord.Embed(title="Match Starting!", description=f"The lobby is full! The match is starting in {self.vc.mention}", color=0x3498db)
         await interaction.message.edit(embed=embed, view=self)
@@ -3037,17 +2898,17 @@ async def set_assign_roles_channel(ctx):
         description="Select the games you want to be notified for. You can select multiple.",
         color=0x5865F2
     )
-    # We pass the member so the initial view is rendered correctly for them
-    view = RoleButtonView(ctx.author)
+    view = RoleButtonView()
     message = await ctx.send(embed=embed, view=view)
-    
+
     # Store message and channel ID for persistence
-    settings = get_guild_settings(ctx.guild.id)
-    settings['assign_roles_channel_id'] = ctx.channel.id
-    settings['assign_roles_message_id'] = message.id
-    update_guild_settings(ctx.guild.id, settings)
-    
-    await ctx.message.delete() # Clean up the command message
+    set_guild_setting(ctx.guild.id, "assign_roles_channel_id", ctx.channel.id)
+    set_guild_setting(ctx.guild.id, "assign_roles_message_id", message.id)
+
+    try:
+        await ctx.message.delete()
+    except discord.Forbidden:
+        pass
 
 @bot.command(name="helpme")
 async def help_command(ctx, command_name: Optional[str] = None):
@@ -3294,8 +3155,11 @@ async def check_and_assign_roles(member: discord.Member, channels_created: int):
 
 async def heartbeat() -> None:
     while True:
-        logger.info("Heartbeat - Bot is alive!")
-        await asyncio.sleep(60)  # Log every minute
+        await asyncio.sleep(300)  # save every 5 minutes
+        try:
+            save_all_data()
+        except Exception as e:
+            logger.error(f"Heartbeat save failed: {e}")
 
 
 async def reset_voice_activity() -> None:
@@ -3922,7 +3786,7 @@ def _load_mention_spam_tracker() -> None:
     try:
         mention_spam_tracker.clear()
         for doc in db.mention_spam_tracker.find():
-            key = eval(doc["key"])
+            key = tuple(doc["key"]) if isinstance(doc["key"], list) else ast.literal_eval(doc["key"])
             mention_spam_tracker[key] = deque(doc["timestamps"], maxlen=MENTION_SPAM_THRESHOLD)
         logger.debug("mention_spam_tracker loaded successfully")
     except Exception as e:
@@ -4286,7 +4150,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
             'no_warnings': True,
             'default_search': 'auto',
             'source_address': '0.0.0.0',
-            'cookiesfrombrowser': 'chrome', # Or 'firefox', 'edge', etc. Requires 'browser_cookie3' library.
         }
         ffmpeg_options = {
             'options': '-vn'
@@ -4519,29 +4382,7 @@ async def reset_voice_activity_weekly() -> None:
         save_all_data()
         logger.info("Reset weekly voice activity and awarded champion role.")
 
-@bot.event
-async def on_command_error(ctx, error):
-    """The event triggered when an error is raised while invoking a command."""
-    if isinstance(error, commands.CommandNotFound):
-        return  # Ignore commands that don't exist
-
-    if isinstance(error, discord.errors.DiscordServerError):
-        try:
-            await ctx.send("ðŸ”¬ Discord is having some issues right now. Please try again in a moment.")
-        except Exception as e:
-            logger.error(f"Failed to send DiscordServerError message: {e}")
-        logger.error(f"Discord Server Error: {error}")
-        return
-
-    # For other errors, log them and notify the user
-    logger.error(f'Ignoring exception in command {ctx.command}:')
-    logger.error(traceback.format_exc())
-    try:
-        await ctx.send(f"ðŸ˜” An unexpected error occurred. Please check the logs.")
-    except Exception as e:
-        logger.error(f"Failed to send generic error message: {e}")
-
-token = os.getenv("TOKEN")
+token = os.getenv(“TOKEN”)
 if not token:
     logger.error("❌ No TOKEN environment variable found!")
     logger.error("Please set your Discord bot token in the Secrets tab.")
